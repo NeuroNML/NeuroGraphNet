@@ -1,25 +1,45 @@
 name: neuro
 channels:
+  - conda-forge
   - defaults
 dependencies:
+  - appnope=0.1.4
+  - asttokens=3.0.0
   - blas=1.0
   - bottleneck=1.4.2
   - brotli-python=1.0.9
   - bzip2=1.0.8
   - ca-certificates=2025.2.25
+  - certifi=2025.1.31
+  - charset-normalizer=3.3.2
+  - comm=0.2.2
   - contourpy=1.3.1
   - cycler=0.11.0
+  - debugpy=1.8.11
+  - decorator=5.2.1
   - deprecated=1.2.13
+  - exceptiongroup=1.2.2
+  - executing=2.1.0
   - expat=2.6.4
   - filelock=3.13.1
   - fonttools=4.55.3
   - freetype=2.12.1
   - fsspec=2024.12.0
+  - geographiclib=2.0
+  - geopy=2.4.1
   - gmp=6.3.0
   - gmpy2=2.2.1
+  - hatchling=1.27.0
+  - idna=3.7
   - importlib-metadata=7.0.1
+  - ipykernel=6.29.5
+  - ipython=9.0.2
+  - ipython_pygments_lexers=1.1.1
+  - jedi=0.19.2
   - jinja2=3.1.6
   - jpeg=9e
+  - jupyter_client=8.6.3
+  - jupyter_core=5.7.2
   - kiwisolver=1.4.8
   - lcms2=2.16
   - lerc=4.0.0
@@ -33,6 +53,7 @@ dependencies:
   - libopenblas=0.3.21
   - libpng=1.6.39
   - libprotobuf=4.25.3
+  - libsodium=1.0.18
   - libtiff=4.5.1
   - libtorch=2.5.1
   - libuv=1.48.0
@@ -40,12 +61,12 @@ dependencies:
   - llvm-openmp=14.0.6
   - lz4-c=1.9.4
   - markupsafe=3.0.2
-  - matplotlib=3.10.0
-  - matplotlib-base=3.10.0
+  - matplotlib-inline=0.1.7
   - mpc=1.3.1
   - mpfr=4.2.1
   - mpmath=1.3.0
   - ncurses=6.4
+  - nest-asyncio=1.6.0
   - networkx=3.4.2
   - nomkl=3.0
   - numexpr=2.10.1
@@ -56,30 +77,55 @@ dependencies:
   - opentelemetry-api=1.26.0
   - packaging=24.2
   - pandas=2.2.3
+  - parso=0.8.4
+  - pathspec=0.10.3
+  - pexpect=4.9.0
+  - pickleshare=0.7.5
   - pillow=11.1.0
   - pip=25.0
+  - platformdirs=4.3.6
+  - pluggy=1.5.0
+  - prompt-toolkit=3.0.50
+  - psutil=7.0.0
+  - ptyprocess=0.7.0
+  - pure_eval=0.2.3
+  - pygments=2.19.1
+  - pygsp=0.5.1
+  - pygsp2=2.0.15
   - pyparsing=3.2.0
+  - pysocks=1.7.1
   - python=3.13.2
   - python-dateutil=2.9.0post0
   - python-tzdata=2023.3
   - python_abi=3.13
   - pytorch=2.5.1
   - pytz=2024.1
+  - pyxlsb=1.0.10
+  - pyzmq=26.2.0
   - readline=8.2
+  - requests=2.32.3
   - scipy=1.15.1
   - seaborn=0.13.2
   - setuptools=72.1.0
   - six=1.16.0
   - sleef=3.5.1
   - sqlite=3.45.3
+  - stack_data=0.6.3
   - sympy=1.13.3
   - tk=8.6.14
   - tornado=6.4.2
+  - traitlets=5.14.3
+  - trove-classifiers=2024.10.14
   - typing_extensions=4.12.2
   - tzdata=2025a
+  - unidecode=1.3.8
+  - urllib3=2.3.0
+  - utm=0.7.0
+  - wcwidth=0.2.13
   - wheel=0.45.1
   - wrapt=1.17.0
   - xz=5.6.4
+  - zeromq=4.3.5
   - zipp=3.21.0
   - zlib=1.2.13
   - zstd=1.5.6
@@ -87,15 +133,15 @@ dependencies:
       - annotated-types==0.7.0
       - antlr4-python3-runtime==4.9.3
       - click==8.1.8
+      - matplotlib==3.10.1
       - mypy-extensions==1.0.0
       - omegaconf==2.3.0
       - pandera==0.23.1
-      - pexpect==4.9.0
-      - ptyprocess==0.7.0
       - pyarrow==19.0.1
       - pydantic==2.10.6
       - pydantic-core==2.27.2
       - pyedflib==0.1.40
+      - pyproject-hooks==1.2.0
       - pyyaml==6.0.2
       - seiz-eeg==0.4.3
       - tqdm==4.67.1
