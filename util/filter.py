@@ -1,5 +1,5 @@
 from scipy import signal
-from numpy import np
+import numpy as np
 
 bp_filter = signal.butter(4, (0.5, 30), btype="bandpass", output="sos", fs=250)
 
