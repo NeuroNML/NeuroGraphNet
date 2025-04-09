@@ -1,3 +1,5 @@
 # Avoid pushing datasets to remote (6GB is a lot)
 data/
 *.csv
+.gitignore
+__pycache__
