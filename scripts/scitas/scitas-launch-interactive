@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+# Ask name!
+ssh ldibello@izar.hpc.epfl.ch
+
+# Execture the following commands on the remote server
+
+# launch interactive session on SCITAS
+Sinteract -q ee-452 -p gpu -g gpu:1
+
+# Load gcc and python modules
+module load gcc python
+# 
+
+# Load additional modules (not required for development but only for developer experience)
+module load neovim 
