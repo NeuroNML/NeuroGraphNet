@@ -7,3 +7,4 @@ python3 -m venv --system-site-packages venvs/neuro
 source venvs/neuro/bin/activate
 
 # Install the required packages
+pip3 install -r requirements.txt
