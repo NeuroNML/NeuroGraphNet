@@ -1,7 +1,7 @@
 #!/bin/bash
 
-#SBATCH --job-name=jupyter_notebook  # Job name
-#SBATCH --output=jupyter_notebook_%j.log # Standard output and error log
+#SBATCH --job-name=eeg_jupyter  # Job name
+#SBATCH --output=eeg_jupyter_%j.log # Standard output and error log
 #SBATCH --partition=gpu             # Specify the partition
 #SBATCH --qos=ee-452                # Specify the Quality of Service if needed
 #SBATCH --gres=gpu:1                # Request 1 GPU
