@@ -1,0 +1,9 @@
+# requirements for SCITAS cluster virtual environment
+numpy
+pandas
+matplotlib
+tqdm
+torch
+seaborn
+seiz-eeg
+jupyter # additional dependency to run jupyter notebooks
