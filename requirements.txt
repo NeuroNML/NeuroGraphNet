@@ -6,4 +6,5 @@ tqdm
 torch
 seaborn
 seiz-eeg
+torchmetrics
 jupyter # additional dependency to run jupyter notebooks
