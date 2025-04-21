@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Sync .checkpoints and .submissions directories from the HCP cluster to the local machine.
+# sync_models.sh
+# Sync .checkpoints and .submissions from the HCP cluster to the local machine.
 #
 # Usage:  ./sync.sh <username> [server=izar.hpc.epfl.ch] [remote_dir=~/NeuroGraphNet]
-# Example: ./sync.sh ldibello
+# Example: ./sync.sh jdoe
 
 set -euo pipefail
 
@@ -16,6 +17,9 @@ USER="$1"
 SERVER="${2:-izar.hpc.epfl.ch}"
 REMOTE_DIR="${3:-~/NeuroGraphNet}"
 
-# ---------- Sync ----------
-rsync -avz "${USER}@${SERVER}:${REMOTE_DIR}/.checkpoints"   .
-rsync -avz "${USER}@${SERVER}:${REMOTE_DIR}/.submissions"   .
+# ---------- Sync checkpoints ----------
+rsync -avz "${USER}@${SERVER}:${REMOTE_DIR}/.checkpoints" .
+
+# ---------- Sync submissions ----------
+mkdir -p submissions
+rsync -avz "${USER}@${SERVER}:${REMOTE_DIR}/.submissions/" submissions
