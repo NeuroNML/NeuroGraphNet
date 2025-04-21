@@ -64,3 +64,17 @@ def plot_eeg_clip(signal_data, title_prefix, sampling_rate, channel_names, offse
     else:
         print(
             f"Error: Mismatch plotting {title_prefix}. Time vector shape {time_vector.shape} vs Data shape {signal_data.shape}")
+
+def plot_training_loss(train_losses, num_epochs):
+    """Plots the training loss over epochs."""
+    if train_losses is None or not isinstance(train_losses, list) or len(train_losses) != num_epochs:
+        print(f"Invalid training loss data. Expected {num_epochs} epochs.")
+        return
+
+    plt.figure(figsize=(6, 4))
+    plt.plot(range(1, num_epochs + 1), train_losses, marker="o")
+    plt.title("Training Loss Over Epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.grid(True)
+    plt.show()
