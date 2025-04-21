@@ -4,9 +4,11 @@
 #SBATCH --output=eeg_jupyter_%j.log
 #SBATCH --partition=gpu
 #SBATCH --account=ee-452
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=32G
 #SBATCH --time=02:00:00
 
 echo "Loading modules…"
@@ -26,7 +28,7 @@ PORT=$(shuf -i 8000-9999 -n 1)
 cat <<EOF
 ===============================================
 Job ${SLURM_JOB_ID} on ${NODE}
-Tunnel: ssh -N -L 8888:${NODE}:${PORT} ${USER}@izar.hpc.epfl.ch
+Tunnel: ssh -N -L 8888:$(hostname -i):${PORT} ${USER}@izar.hpc.epfl.ch
 Browse: http://localhost:8888
 ===============================================
 EOF
