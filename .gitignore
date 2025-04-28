@@ -1,4 +1,6 @@
 # Avoid pushing datasets to remote (6GB is a lot)
 data/
+.venv/
+.gitignore
 *.csv
 *.parquet
