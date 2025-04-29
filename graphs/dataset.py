@@ -50,7 +50,7 @@ class GraphEEGDataset(Dataset):
                          'FZ', 'CZ', 'PZ']
         
         # Load metadata
-        self.metadata = pd.read_parquet(metadata_file)
+        self.metadata = pd.read_parquet(metadata_file)[:19*1000]
         
         # Load spatial distances if applicable
         if edge_strategy == 'spatial' and spatial_distance_file is not None:
@@ -182,9 +182,7 @@ class GraphEEGDataset(Dataset):
         for idx, (_, row) in enumerate(self.metadata.iterrows()):
             # Load signal data
             signal_data = pd.read_parquet(f"{self.signal_folder}/{row['signals_path']}")
-            
-            # Resize signal to target length
-            signal_data = self._resize_signal(signal_data)
+            #print(f'Loading {signal_data.shape[0]} signals')
 
             # Extract signals as features (nodes x features)
             # Each channel is a node, and its time series is its feature vector
