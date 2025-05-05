@@ -4,6 +4,7 @@ pandas
 matplotlib
 tqdm
 torch
+torch-geometric # for Graph Neural Networks
 seaborn
 seiz-eeg
 torchmetrics
