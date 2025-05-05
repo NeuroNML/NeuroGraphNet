@@ -8,9 +8,10 @@ class AttnPool1d(nn.Module):
     def __init__(self, dim, heads=4):
         super().__init__()
         self.heads = heads
-        self.scale = dim ** -0.5
-        self.q     = nn.Parameter(torch.randn(heads, dim))   # (H, C)
-        self.kv    = nn.Linear(dim, dim*2, bias=False)
+        self.dim_head = dim // heads
+        self.scale = self.dim_head ** -0.5
+        self.q = nn.Parameter(torch.randn(heads, self.dim_head))   # (H, C')
+        self.kv = nn.Linear(dim, dim*2, bias=False)
 
     def forward(self, x):               # x: (B, C, T)
         B, C, T = x.shape
@@ -24,7 +25,7 @@ class AttnPool1d(nn.Module):
         return pooled.permute(1,0,2).reshape(B, C)
 
 class EEGCNN(nn.Module):
-    def __init__(self, in_ch=19, n_classes=1, d=0.3):
+    def __init__(self, input_channels=19, n_classes=1, dropout=0.3):
         super().__init__()
         def block(c_in, c_out, dilation):
             return nn.Sequential(
@@ -33,7 +34,7 @@ class EEGCNN(nn.Module):
                 nn.ReLU(inplace=True),
             )
 
-        self.stem   = block(in_ch, 32, 1)
+        self.stem   = block(input_channels, 32, 1)
         self.layer0 = block(32, 32, 4)
         self.down0  = nn.MaxPool1d(2)
 
@@ -45,7 +46,7 @@ class EEGCNN(nn.Module):
         self.layer4 = block(128,128, 4)
 
         self.attn_pool = AttnPool1d(128, heads=4)
-        self.drop      = nn.Dropout(d)
+        self.drop      = nn.Dropout(dropout)
         self.fc        = nn.Linear(128, n_classes)
 
     def forward(self, x):
