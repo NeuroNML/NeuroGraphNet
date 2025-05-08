@@ -1,6 +1,6 @@
 import torch
 from torch_geometric.loader import DataLoader
-from dataset import GraphEEGDataset
+from util.dataset import GraphEEGDataset
 
 # Initialize dataset with spatial edge strategy
 dataset_spatial = GraphEEGDataset(

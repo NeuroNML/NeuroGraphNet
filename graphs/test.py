@@ -4,7 +4,7 @@ from torch_geometric.loader import DataLoader
 import numpy as np
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
-from dataset import GraphEEGDataset
+from util.dataset import GraphEEGDataset
 from models.gcn import EEGGCN
 
 
