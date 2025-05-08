@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, BatchNorm1d, global_mean_pool
 from torch_geometric.nn import Linear
-from layers.eeggnn import EEGGCN
+from layers.eeggcn import EEGGCN
 
 class LSTMEncoder(nn.Module):
     def __init__(self, input_dim=19, hidden_dim=64, num_layers=1, dropout=0.2, bidirectional=False):
