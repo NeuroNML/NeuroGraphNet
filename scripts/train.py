@@ -25,8 +25,8 @@ from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 # --------------------- Custom imports --------------------- #
 # Add the root directory to path
 project_root = (
-    Path(__file__).resolve().parents[2]
-)  # 2 levels up from src/scripts/ -> repository root
+    Path(__file__).resolve().parents[1]
+)  # 1 levels up from scripts/ -> repository root
 sys.path.append(str(project_root))
 from src.dataset import GraphEEGDataset
 from src.utils.models_funcs import build_model
