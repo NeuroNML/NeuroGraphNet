@@ -14,7 +14,6 @@ class EEGGCN(torch.nn.Module):
         hidden_channels,
         out_channels,
         num_conv_layers=3,
-        in_channels=250 * 12,
         pooling_type="mean",
     ):
         """
