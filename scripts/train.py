@@ -79,7 +79,10 @@ def main():
         ),
         correlation_threshold=config.correlation_threshold,
         force_reprocess=True,
-        bandpass_frequencies=(config.low_bandaspass_freq, config.high_bandpass_freq),
+        bandpass_frequencies=(
+            config.low_bandpass_frequency,
+            config.high_bandpass_frequency,
+        ),
         segment_length=3000,
         apply_filtering=True,
         apply_rereferencing=True,
