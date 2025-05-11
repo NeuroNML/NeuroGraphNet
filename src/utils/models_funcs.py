@@ -1,3 +1,5 @@
+import importlib
+
 from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool
 import torch
 
@@ -13,15 +15,20 @@ def build_model(config):
         torch.nn.Module: The constructed model.
     """
     # Extract model type and parameters from the config
-    model_type = config.model.type
+    model_name = config.model.name
     model_params = config.model.params
 
-    # Dynamically import the model class based on the type
-    module = __import__(f"src.models.{model_type}", fromlist=[model_type])
-    model_class = getattr(module, model_type)
+    # Import model class
+    module = importlib.import_module(
+        f"src.models.{model_name}"
+    )  # loads file src/models/{model_type}.py
+    model_class = getattr(
+        module, model_name
+    )  # Extract the class (model_type) from the module
 
-    # Create an instance of the model with the specified parameters
-    return model_class(**model_params)
+    return model_class(
+        **model_params
+    )  # Create an instance of the model with the specified parameters
 
 
 def pooling(x, batch, pooling_type):
