@@ -15,5 +15,5 @@ oversampling_power: 0.5
 
 edge_strategy: spatial
 correlation_threshold: 0.7
-low_bandpass_freq: 0.5
-high_bandpass_freq: 45
+low_bandpass_frequency: 0.5
+high_bandpass_frequency: 50
