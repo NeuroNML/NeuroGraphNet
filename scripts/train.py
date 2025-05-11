@@ -28,11 +28,9 @@ project_root = (
     Path(__file__).resolve().parents[1]
 )  # 1 levels up from scripts/ -> repository root
 sys.path.append(str(project_root))
-from src.dataset import GraphEEGDataset
+from src.data.dataset import GraphEEGDataset
 from src.utils.models_funcs import build_model
-
-# --------------------- Logging function --------------------- #
-log = lambda msg: print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+from src.utils.general_funcs import log
 
 
 def main():
