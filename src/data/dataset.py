@@ -1,0 +1,293 @@
+# --------------------------------------- General imports ---------------------------------------#
+import os.path as osp
+from typing import Optional, Dict, Tuple
+
+import pandas as pd
+import numpy as np
+import networkx as nx
+from scipy import signal
+
+import torch
+from torch_geometric.data import Dataset, Data
+
+
+# --------------------------- Custom imports ---------------------------#
+from src.utils.preprocessing_funcs import time_filtering
+
+
+class GraphEEGDataset(Dataset):
+    def __init__(
+        self,
+        root: str,
+        sessions: pd.DataFrame,
+        signal_folder: str,
+        edge_strategy: str = "spatial",
+        spatial_distance_file: Optional[pd.DataFrame] = None,
+        correlation_threshold: float = 0.7,
+        force_reprocess: bool = False,
+        bandpass_frequencies: Tuple[float, float] = (0.5, 50),
+        segment_length: int = 12 * 250,  # 12 seconds * 250 Hz -> 3000 samples
+        apply_filtering: bool = True,
+        apply_rereferencing: bool = True,
+        apply_normalization: bool = True,
+        sampling_rate: int = 250,
+    ):
+        """
+        Custom PyTorch Geometric dataset for EEG data.
+
+        Args:
+            root: Root directory where the dataset should be saved
+            sessions: list of tuples containing (patient_id, session_id) and session DataFrame
+            signal_folder: Path to the folder containing EEG signal files
+            edge_strategy: Strategy to create edges ('spatial' or 'correlation')
+            spatial_distance_file: Path to file containing spatial distances (required if edge_strategy='spatial')
+            correlation_threshold: Threshold for creating edges based on correlation (used if edge_strategy='correlation')
+            transform: Transform to be applied to each data object
+            pre_transform: Pre-transform to be applied to each data object
+            pre_filter: Pre-filter to be applied to each data object
+            sampling_rate: Sampling rate of the EEG data - fixed to 250 Hz
+        """
+        self.root = root
+        self.sessions = sessions
+        self.signal_folder = signal_folder
+        self.force_reprocess = force_reprocess
+        self.bandpass_frequencies = bandpass_frequencies
+        self.edge_strategy = edge_strategy
+        self.spatial_distance_file = spatial_distance_file
+        self.correlation_threshold = correlation_threshold
+        self.segment_length = segment_length
+        self.apply_filtering = apply_filtering
+        self.apply_rereferencing = apply_rereferencing
+        self.apply_normalization = apply_normalization
+        self.sampling_rate = sampling_rate
+
+        # EEG channels - standard 10-20 system
+        self.channels = [
+            "FP1",
+            "FP2",
+            "F3",
+            "F4",
+            "C3",
+            "C4",
+            "P3",
+            "P4",
+            "O1",
+            "O2",
+            "F7",
+            "F8",
+            "T3",
+            "T4",
+            "T5",
+            "T6",
+            "FZ",
+            "CZ",
+            "PZ",
+        ]
+
+        # Define frequency filters
+        self.bp_filter = signal.butter(
+            4,
+            self.bandpass_frequencies,
+            btype="bandpass",
+            output="sos",
+            fs=sampling_rate,
+        )
+        self.notch_filter = signal.iirnotch(
+            w0=60, Q=30, fs=sampling_rate
+        )  # Filter to remove 60 Hz noise (fixed frequency)
+
+        # Load spatial distances if applicable
+        if edge_strategy == "spatial" and spatial_distance_file is not None:
+            self.spatial_distances = self._load_spatial_distances(spatial_distance_file)
+
+        super().__init__(root, transform=None, pre_transform=None, pre_filter=None)
+
+        if self.force_reprocess:
+            self.process()
+
+    def _load_spatial_distances(self) -> Dict:
+        """
+        Load spatial distances between electrodes.
+        Expected format: csv file that can be loaded into a dictionary or matrix
+        representing distances between electrodes.
+
+        Returns:
+            Dictionary of distances or adjacency matrix
+        """
+        spatial_distances = (
+            {}
+        )  # Dictionary to store distances between electrodes with keys (tuple) as (ch1, ch2)
+
+        for _, row in self.spatial_distance_file.iterrows():
+            ch1 = row["from"]
+            ch2 = row["to"]
+            dist = row["distance"]
+
+            spatial_distances[(ch1, ch2)] = dist
+            spatial_distances[(ch2, ch1)] = dist
+
+        return spatial_distances
+
+    def process(self):
+        """
+        Processes raw data into PyTorch Geometric Data objects.
+        """
+        idx = 0
+        for (_, _), session_df in self.sessions:
+            # Load signal data (for complete session)
+            session_signal = pd.read_parquet(
+                f"{self.signal_folder}/{session_df['signals_path'].values[0]}"  # Any 'signal_path' in session_df points to same parquet
+            )
+            session_labels = session_df["label"].values
+
+            # ------------------------- Preprocess signal data ---------------------------#
+            session_signal = self._preprocess_signal(session_signal)
+
+            #  ------------ Extract corresponding segments from signal ---------------------#
+            for index, start in enumerate(
+                range(0, len(session_signal), self.segment_length)
+            ):  # 0, 3000, 6000, ...
+                end = start + self.segment_length
+                segment_signal = session_signal[
+                    start:end
+                ].T  # Transpose to get channels as rows: (3000 time points,19 channel)->(19,3000)
+
+                x = torch.tensor(
+                    segment_signal, dtype=torch.float
+                )  # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
+
+                # Create edges based on the selected strategy
+                edge_index = self._create_edges(segment_signal)
+
+                # Create label tensor
+                y = torch.tensor(
+                    [session_labels[index]], dtype=torch.float
+                )  # BCELoss expects float labels
+
+                # Create Data object
+                data = Data(
+                    x=x,  # Node features: channels x time points
+                    edge_index=edge_index,  # Edges between channels
+                    y=y,  # Label
+                )
+
+                # Save processed data
+                torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
+                idx += 1
+
+    def _filter_signal(self, signal):
+        return time_filtering(
+            signal, bp_filter=self.bp_filter, notch_filter=self.notch_filter
+        )
+
+    def _rereference(self, signal):
+        avg = np.mean(signal, axis=1, keepdims=True)
+        return signal - avg
+
+    def _normalize(self, signal):
+        mean = np.mean(signal, axis=0, keepdims=True)
+        std = np.std(signal, axis=0, keepdims=True)
+        return (signal - mean) / (std + 1e-6)
+
+    def _preprocess_signal(self, signal):
+        if self.apply_filtering:
+            signal = self._filter_signal(signal)
+        if self.apply_rereferencing:
+            signal = self._rereference(signal)
+        if self.apply_normalization:
+            signal = self._normalize(signal)
+        return signal
+
+    def _create_edges(self, signal_data: pd.DataFrame) -> torch.Tensor:
+        """
+        Creates edges between EEG channels based on the specified strategy.
+
+        Args:
+            signal_data: DataFrame containing EEG signals
+
+        Returns:
+            torch.Tensor: Edge index tensor of shape [2, num_edges]
+        """
+        if self.edge_strategy == "spatial":
+            return self._create_spatial_edges()
+        elif self.edge_strategy == "correlation":
+            return self._create_correlation_edges(signal_data)
+        else:
+            raise ValueError(f"Unknown edge strategy: {self.edge_strategy}")
+
+    def _create_spatial_edges(self) -> torch.Tensor:
+        """
+        Creates edges based on spatial distances between electrodes.
+
+        Returns:
+            torch.Tensor: Edge index tensor
+        """
+        # Create a graph
+        G = nx.Graph()
+
+        # Add nodes
+        for i, channel in enumerate(self.channels):
+            G.add_node(i, name=channel)
+
+        # Add edges based on distances
+        edge_list = []
+        for i, ch1 in enumerate(self.channels):
+            for j, ch2 in enumerate(self.channels):
+                if i < j:  # Avoid duplicate edges
+                    # Get distance if available, otherwise use a default
+                    distance = self.spatial_distances.get(
+                        (ch1, ch2), 1.0
+                    )  # Get keys (tuple) from dict
+
+                    # Add edge if distance is within threshold (you can adjust this logic)
+                    # Here we're adding all edges but you might want to threshold
+                    G.add_edge(i, j, weight=distance)
+                    edge_list.append([i, j])
+                    edge_list.append([j, i])  # Add in both directions for PyG
+
+        # Convert to tensor
+        edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        return edge_index
+
+    def _create_correlation_edges(self, signal_data: pd.DataFrame) -> torch.Tensor:
+        """
+        Creates edges based on correlation between channel signals.
+
+        Args:
+            signal_data: DataFrame containing EEG signals
+
+        Returns:
+            torch.Tensor: Edge index tensor
+        """
+        # Calculate correlation matrix
+        corr_matrix = np.abs(np.corrcoef(signal_data))
+
+        # Create edges where correlation exceeds threshold
+        edge_list = []
+        for i in range(len(self.channels)):
+            for j in range(len(self.channels)):
+                if j != i and corr_matrix[i, j] >= self.correlation_threshold:
+                    edge_list.append(
+                        [i, j]
+                    )  # you must explicitly add both directions if you want an undirected edge.
+
+        # Convert to tensor
+        edge_index = (
+            torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        )  # [num_edges, 2] → [2, num_edges]; contiguous(): for row-major order
+        return edge_index
+
+    def len(self) -> int:
+        """
+        Returns the number of examples in the dataset (number of graphs saved)
+        """
+        return len(self.processed_file_names)
+
+    def get(self, idx: int) -> Data:
+        """
+        Returns the data object at index idx.
+        """
+        data = torch.load(
+            osp.join(self.processed_dir, f"data_{idx}.pt")
+        )  # Each pt file contains a Data object / graph representing EEG recording
+        return data

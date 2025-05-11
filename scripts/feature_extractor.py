@@ -1,12 +1,21 @@
 if __name__ == "__main__":
 
-    # Absolute paths - add utils directory to path
+    # --------------------- General imports --------------------- #
+
     import sys
     import os
+    from pathlib import Path
+    from joblib import Parallel, delayed
 
+    import numpy as np
+    import pandas as pd
+    from tqdm import tqdm
+
+    from scipy import signal
+
+    # --------------------- Custom imports --------------------- #
+    # Absolute paths - add utils directory to path
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-    from utils.imports import *
     from utils.preprocessing_funcs import process_session
 
     # --------------- Define path to extract clips -----------------------------------
@@ -36,7 +45,6 @@ if __name__ == "__main__":
     )  # Need to convert to SOS format (same formar as bp_filter) for numerical stability
 
     # Training set
-    """
 
     X_train = []
 
@@ -60,7 +68,6 @@ if __name__ == "__main__":
         X_train.extend(session)
 
     X_train = np.array(X_train)
-    """
 
     # Test set
 
