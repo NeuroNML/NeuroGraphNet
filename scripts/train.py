@@ -3,13 +3,17 @@
 import argparse
 import io
 import yaml
-import wandb
+import sys
+from pathlib import Path
+from datetime import datetime
+
 
 import numpy as np
 import pandas as pd
-
-from pathlib import Path
 from tqdm import tqdm
+import wandb
+
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 
@@ -19,9 +23,16 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 
 # --------------------- Custom imports --------------------- #
-
+# Add the root directory to path
+project_root = (
+    Path(__file__).resolve().parents[2]
+)  # 2 levels up from src/scripts/ -> repository root
+sys.path.append(str(project_root))
 from src.dataset import GraphEEGDataset
 from src.utils.models_funcs import build_model
+
+# --------------------- Logging function --------------------- #
+log = lambda msg: print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 def main():
@@ -126,7 +137,8 @@ def main():
         # ------- Training ------- #
         model.train()
         total_loss = 0
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch} — Training"):
+        # for batch in tqdm(train_loader,desc=f"Epoch {epoch} — Training" ):
+        for batch in train_loader:
             batch = batch.to(device)
             optimizer.zero_grad()
             out = model(batch.x, batch.edge_index, batch.batch)
@@ -139,8 +151,6 @@ def main():
         # ------- Validation ------- #
         model.eval()
         val_loss = 0
-        correct = 0
-        total = 0
         all_preds = []
         all_labels = []
 
@@ -162,6 +172,8 @@ def main():
 
         avg_val_loss = val_loss / len(val_loader)  # Average loss per batch
         val_f1 = f1_score(all_labels, all_preds, average="macro")
+        # Monitor progress
+        log(f"Finished Epoch {epoch} | Avg Val Loss: {avg_val_loss:.4f}")
 
         # W&B
         wandb.log(
