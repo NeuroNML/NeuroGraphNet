@@ -61,9 +61,7 @@ def main():
     # --- Initialize W&B run --- #
     wandb.init(
         project="eeg-seizure",
-        config=OmegaConf.to_container(
-            config, resolve=True, structured=True
-        ),  # structured=True to keep the nested structure
+        config=OmegaConf.to_container(config, resolve=True),
         name=run_name,
     )
 
