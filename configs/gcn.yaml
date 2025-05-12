@@ -6,14 +6,15 @@ model:
     out_channels: 1
     num_conv_layers: 3
     pooling_type: mean
+    dropout_prob: 0.5
 
 batch_size: 32
 learning_rate: 0.001
+weight_decay: 0.01
 epochs: 200
 seed: 42
 oversampling_power: 1
-
-edge_strategy: spatial
+edge_strategy: correlation
 correlation_threshold: 0.9
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50
