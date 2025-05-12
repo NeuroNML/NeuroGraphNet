@@ -165,6 +165,9 @@ def main():
         # for batch in tqdm(train_loader,desc=f"Epoch {epoch} — Training" ):
         for batch in train_loader:
             batch = batch.to(device)  # Move batch to GPU
+            print(f"batch.x device: {batch.x.device}")
+            print(f"batch.edge_index device: {batch.edge_index.device}")
+            print(f"batch.batch device: {batch.batch.device}")
             optimizer.zero_grad()
             out = model(batch.x, batch.edge_index, batch.batch)
             loss = loss_fn(
