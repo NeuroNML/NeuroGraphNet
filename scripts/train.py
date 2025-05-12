@@ -53,6 +53,7 @@ def main():
 
     # --- Load config --- #
     config = OmegaConf.load(
+        # "configs/gcn.yaml"
         f"configs/{args.config}"
     )  # Accepts nested structure and dot notation
     run_name = generate_run_name(config)  # Generate run name
@@ -89,7 +90,7 @@ def main():
             spatial_distance_file if config.edge_strategy == "spatial" else None
         ),
         correlation_threshold=config.correlation_threshold,
-        force_reprocess=False,
+        force_reprocess=True,
         bandpass_frequencies=(
             config.low_bandpass_frequency,
             config.high_bandpass_frequency,

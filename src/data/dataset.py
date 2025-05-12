@@ -263,6 +263,10 @@ class GraphEEGDataset(Dataset):
         """
         # Calculate correlation matrix
         corr_matrix = np.abs(np.corrcoef(signal_data))
+        if np.isnan(corr_matrix).any():
+            raise ValueError("Correlation matrix contains NaNs.")
+        if np.isinf(corr_matrix).any():
+            raise ValueError("Correlation matrix contains infinite values.")
 
         # Create edges where correlation exceeds threshold
         edge_list = []
@@ -271,12 +275,11 @@ class GraphEEGDataset(Dataset):
                 if j != i and corr_matrix[i, j] >= self.correlation_threshold:
                     edge_list.append(
                         [i, j]
-                    )  # you must explicitly add both directions if you want an undirected edge.
+                    )  #  must explicitly add both directions for an undirected edge.
 
         # Convert to tensor
-        edge_index = (
-            torch.tensor(edge_list, dtype=torch.long).t().contiguous()
-        )  # [num_edges, 2] → [2, num_edges]; contiguous(): for row-major order
+        edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        # [num_edges, 2] → [2, num_edges]; contiguous(): for row-major order
         return edge_index
 
     def len(self) -> int:
