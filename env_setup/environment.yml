@@ -1,0 +1,25 @@
+name: nml_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy==1.26.4
+  - pandas
+  - matplotlib
+  - seaborn
+  - scipy
+  - statsmodels
+  - scikit-learn
+  - pandera
+  - pyedflib
+  - tqdm
+  - pyarrow
+  - networkx
+  - imbalanced-learn
+  - omegaconf
+  - pip
+  - pip:
+      - torch==2.1.0
+      - wandb
+      - pyyaml
