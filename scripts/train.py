@@ -211,14 +211,14 @@ def main():
                 "val_f1": val_f1,
             }
         )
-
-        # ------- Early Stopping ------- #
-        if avg_val_loss < best_val_loss:
-
-            # Save best statistics and model
-            best_val_loss = avg_val_loss
+        # ------- Record best F1 score ------- #
+        if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             best_val_f1_epoch = epoch
+        # ------- Early Stopping ------- #
+        if avg_val_loss < best_val_loss:
+            # Save best statistics and model
+            best_val_loss = avg_val_loss
             counter = 0
             best_state_dict = model.state_dict().copy()  # Save the best model state
         else:
@@ -227,12 +227,12 @@ def main():
                 log("Early stopping triggered.")
                 break
 
-    log(f"Best Validation F1: {best_val_f1:.4f}")
+    log(f"Best validation F1: {best_val_f1:.4f} at epoch {best_val_f1_epoch}")
 
     # Loads best stats in W&B
     log("Saving best metrics and model")
-    wandb.run.summary["best_val_f1"] = best_val_f1
-    wandb.run.summary["best_val_f1_epoch"] = best_val_f1_epoch
+    wandb.run.summary["best_f1"] = best_val_f1
+    wandb.run.summary["best_f1_epoch"] = best_val_f1_epoch
 
     #  -------------- Save best model ------------------#
     # -------------- Save best model ------------------ #
