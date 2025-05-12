@@ -2,6 +2,7 @@
 # --------------------- General imports --------------------- #
 import argparse
 import io
+import os
 import yaml
 import sys
 from pathlib import Path
@@ -11,7 +12,9 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
 import wandb
+from omegaconf import OmegaConf
 
 
 from sklearn.model_selection import train_test_split
@@ -20,7 +23,9 @@ from sklearn.metrics import f1_score
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+from torch.utils.data import Subset, WeightedRandomSampler
+
+from torch_geometric.loader import DataLoader
 
 # --------------------- Custom imports --------------------- #
 # Add the root directory to path
@@ -30,7 +35,7 @@ project_root = (
 sys.path.append(str(project_root))
 from src.data.dataset import GraphEEGDataset
 from src.utils.models_funcs import build_model
-from src.utils.general_funcs import  log
+from src.utils.general_funcs import log
 
 
 # --------------------------------------------- Main function ---------------------------------------------------------#a
@@ -39,6 +44,7 @@ from src.utils.general_funcs import  log
 def main():
 
     # --- Parse config file path from command line --- #
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="config.yaml")
     args = parser.parse_args()
@@ -46,40 +52,41 @@ def main():
     # --- Load config --- #
     with open(args.config, "r") as f:
         default_config = yaml.safe_load(f)
-
+    """
+    # --- Load config --- #
+    # run_config = OmegaConf.load(args.config)
+    config = OmegaConf.load(
+        "./configs/gcn.yaml"
+    )  # Accepts nested structure and dot notation
     # --- Initialize W&B run --- #
-    wandb.init(project="eeg-seizure", config=default_config)
-    config = wandb.config  # Replaces variables with W&B-managed config
+    wandb.init(
+        project="eeg-seizure", config=OmegaConf.to_container(config, resolve=True)
+    )
 
     # -------- Define directories -------- #
 
     DATA_ROOT = Path("data")
     train_dir = DATA_ROOT / "train"
-    train_dir_signals = train_dir / "signals"
     train_dir_metadata = train_dir / "segments.parquet"
-    train_dataset_dir = DATA_ROOT / "train_dataset"
-    spatial_distance_file = pd.read_csv(DATA_ROOT / "distances_3d.csv")
+    train_dataset_dir = DATA_ROOT / "graph_dataset_train"
+    spatial_distance_file = DATA_ROOT / "distances_3d.csv"
 
     # ----------------- Prepare training data -----------------#
 
-    clips_tr = pd.read_parquet(train_dir_metadata)
+    clips_tr = pd.read_parquet(train_dir_metadata)[:1000]
     clips_tr = clips_tr[~clips_tr.label.isna()]  # Filter NaN values out of clips_tr
-    # Extract the sessions
-    sessions = list(
-        clips_tr.groupby(["patient", "session"])
-    )  # List of tuples: ((patient_id, session_id), session_df)
 
     # -------------- Dataset definition -------------- #
     train_dataset = GraphEEGDataset(
         root=train_dataset_dir,
-        sessions=sessions,
-        signal_folder=train_dir_signals,
+        clips=clips_tr,
+        signal_folder=train_dir,
         edge_strategy=config.edge_strategy,
         spatial_distance_file=(
-            str(spatial_distance_file) if config.edge_strategy == "spatial" else None
+            spatial_distance_file if config.edge_strategy == "spatial" else None
         ),
         correlation_threshold=config.correlation_threshold,
-        force_reprocess=True,
+        force_reprocess=False,
         bandpass_frequencies=(
             config.low_bandpass_frequency,
             config.high_bandpass_frequency,
@@ -91,9 +98,16 @@ def main():
         sampling_rate=250,
     )
 
+    # Check the length of the dataset
+    print(f"Length of train_dataset: {len(train_dataset)}")
+
     # --------------- Split dataset intro train/val/test --------------- #
     train_ids, val_ids = train_test_split(
-        np.arange(len(clips_tr)), test_size=0.2, random_state=config.seed, shuffle=True
+        np.arange(len(train_dataset)),
+        test_size=0.2,
+        random_state=config.seed,
+        stratify=clips_tr.label,  # Stratified split based on labels -> to ensure same distribution in train and val sets
+        shuffle=True,
     )
 
     train_subset = Subset(train_dataset, train_ids)
@@ -102,16 +116,19 @@ def main():
     # -------Compute sample weights for oversampling ------------------#
     train_labels = [clips_tr.iloc[i]["label"] for i in train_ids]
     class_counts = np.bincount(train_labels)
-    class_weights = 1.0 / (
-        class_counts**config.oversampling_power
-    )  # Higher weights for not frequent classes
+    # class_weights = 1.0 / (
+    #    class_counts**config.oversampling_power
+    # )  # Higher weights for not frequent classes
+    class_weights = np.where(
+        class_counts > 0, 1.0 / (class_counts**config.oversampling_power), 0.0
+    )
     sample_weights = [
         class_weights[label] for label in train_labels
     ]  # Assign weight to each sample based on its class
 
     # -------------  Define oversampler ------------------------------#
     sampler = WeightedRandomSampler(
-        sample_weights, num_samples=len(sample_weights), replacement=True
+        sample_weights, num_samples=len(train_subset), replacement=True
     )  # Still train on N samples per epoch, but instead of sampling uniformly takes more from minority class
 
     # -------- Create DataLoader -------- #
@@ -143,10 +160,11 @@ def main():
         total_loss = 0
         # for batch in tqdm(train_loader,desc=f"Epoch {epoch} — Training" ):
         for batch in train_loader:
-            batch = batch.to(device)
             optimizer.zero_grad()
             out = model(batch.x, batch.edge_index, batch.batch)
-            loss = loss_fn(out, batch.y)
+            loss = loss_fn(
+                out, batch.y.reshape(-1, 1)
+            )  # y: [batch_size] ->[batch_size, 1]
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -164,7 +182,7 @@ def main():
                 out = model(
                     batch.x, batch.edge_index, batch.batch
                 )  # batch.batch: [num_nodes_batch] = 19*batch_size -> tells the model which graph each node belongs to
-                loss = loss_fn(out, batch.y)
+                loss = loss_fn(out, batch.y.reshape(-1, 1))
                 val_loss += loss.item()
 
                 probs = torch.sigmoid(out).squeeze()  # [batch_size, 1] -> [batch_size]
@@ -211,14 +229,17 @@ def main():
     wandb.run.summary["best_val_f1_epoch"] = best_val_f1_epoch
 
     #  -------------- Save best model ------------------#
-    buffer = io.BytesIO()
-    torch.save(best_state_dict, buffer)
-    buffer.seek(0)
+    # -------------- Save best model ------------------ #
+    model_path = "model.pt"
+    torch.save(best_state_dict, model_path)
 
-    # Save the model as an artifact
+    # Save the model as a W&B artifact
     artifact = wandb.Artifact("best_model", type="model")
-    artifact.add_file(buffer, name="model.pt")
+    artifact.add_file(model_path)
     wandb.log_artifact(artifact)
+
+    #   Delete file after logging
+    os.remove(model_path)
 
 
 if __name__ == "__main__":

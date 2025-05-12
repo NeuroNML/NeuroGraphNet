@@ -1,6 +1,6 @@
 # --------------------------------------- General imports ---------------------------------------#
 import os.path as osp
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 
 import pandas as pd
 import numpy as np
@@ -19,10 +19,10 @@ class GraphEEGDataset(Dataset):
     def __init__(
         self,
         root: str,
-        sessions: pd.DataFrame,
+        clips: pd.DataFrame,
         signal_folder: str,
         edge_strategy: str = "spatial",
-        spatial_distance_file: Optional[pd.DataFrame] = None,
+        spatial_distance_file: Optional[str] = None,
         correlation_threshold: float = 0.7,
         force_reprocess: bool = False,
         bandpass_frequencies: Tuple[float, float] = (0.5, 50),
@@ -37,7 +37,7 @@ class GraphEEGDataset(Dataset):
 
         Args:
             root: Root directory where the dataset should be saved
-            sessions: list of tuples containing (patient_id, session_id) and session DataFrame
+            clips: DataFrame containing segment information (patient, session, start_time, end_time, label, signal_path)
             signal_folder: Path to the folder containing EEG signal files
             edge_strategy: Strategy to create edges ('spatial' or 'correlation')
             spatial_distance_file: Path to file containing spatial distances (required if edge_strategy='spatial')
@@ -48,7 +48,7 @@ class GraphEEGDataset(Dataset):
             sampling_rate: Sampling rate of the EEG data - fixed to 250 Hz
         """
         self.root = root
-        self.sessions = sessions
+        self.clips = clips
         self.signal_folder = signal_folder
         self.force_reprocess = force_reprocess
         self.bandpass_frequencies = bandpass_frequencies
@@ -92,13 +92,14 @@ class GraphEEGDataset(Dataset):
             output="sos",
             fs=sampling_rate,
         )
-        self.notch_filter = signal.iirnotch(
+        notch_filter = signal.iirnotch(
             w0=60, Q=30, fs=sampling_rate
         )  # Filter to remove 60 Hz noise (fixed frequency)
+        self.notch_filter = signal.tf2sos(*notch_filter)
 
         # Load spatial distances if applicable
         if edge_strategy == "spatial" and spatial_distance_file is not None:
-            self.spatial_distances = self._load_spatial_distances(spatial_distance_file)
+            self.spatial_distances = self._load_spatial_distances()
 
         super().__init__(root, transform=None, pre_transform=None, pre_filter=None)
 
@@ -117,8 +118,8 @@ class GraphEEGDataset(Dataset):
         spatial_distances = (
             {}
         )  # Dictionary to store distances between electrodes with keys (tuple) as (ch1, ch2)
-
-        for _, row in self.spatial_distance_file.iterrows():
+        df_distances = pd.read_csv(self.spatial_distance_file)
+        for _, row in df_distances.iterrows():
             ch1 = row["from"]
             ch2 = row["to"]
             dist = row["distance"]
@@ -132,36 +133,37 @@ class GraphEEGDataset(Dataset):
         """
         Processes raw data into PyTorch Geometric Data objects.
         """
+        sessions = list(
+            self.clips.groupby(["patient", "session"])
+        )  # List of tuples: ((patient_id, session_id), session_df)
         idx = 0
-        for (_, _), session_df in self.sessions:
+
+        for (_, _), session_df in sessions:
             # Load signal data (for complete session)
             session_signal = pd.read_parquet(
                 f"{self.signal_folder}/{session_df['signals_path'].values[0]}"  # Any 'signal_path' in session_df points to same parquet
             )
-            session_labels = session_df["label"].values
 
             # ------------------------- Preprocess signal data ---------------------------#
             session_signal = self._preprocess_signal(session_signal)
 
             #  ------------ Extract corresponding segments from signal ---------------------#
-            for index, start in enumerate(
-                range(0, len(session_signal), self.segment_length)
-            ):  # 0, 3000, 6000, ...
-                end = start + self.segment_length
+            for _, row in session_df.iterrows():  # Each row corresponds to a segment
+                start = int(row["start_time"] * self.sampling_rate)
+                end = int(row["end_time"] * self.sampling_rate)
                 segment_signal = session_signal[
                     start:end
                 ].T  # Transpose to get channels as rows: (3000 time points,19 channel)->(19,3000)
 
-                x = torch.tensor(
-                    segment_signal, dtype=torch.float
-                )  # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
+                x = torch.tensor(segment_signal, dtype=torch.float)
+                # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
 
                 # Create edges based on the selected strategy
                 edge_index = self._create_edges(segment_signal)
 
                 # Create label tensor
                 y = torch.tensor(
-                    [session_labels[index]], dtype=torch.float
+                    [row["label"]], dtype=torch.float
                 )  # BCELoss expects float labels
 
                 # Create Data object
@@ -291,3 +293,15 @@ class GraphEEGDataset(Dataset):
             osp.join(self.processed_dir, f"data_{idx}.pt")
         )  # Each pt file contains a Data object / graph representing EEG recording
         return data
+
+    @property
+    def processed_file_names(
+        self,
+    ) -> List[
+        str
+    ]:  #  Filenames that will be use  in the processed directory (if force_reprocess=False)
+        """
+        Returns the names of all processed files.
+        """
+        num_files = []
+        return [f"data_{i}.pt" for i in range(len(self.clips))]
