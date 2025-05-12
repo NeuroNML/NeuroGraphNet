@@ -17,11 +17,12 @@ def build_model(config):
     """
     # Extract model type and parameters from the config
     model_name = config.model.name
+    model_type = config.model.type
     model_params = config.model.params
 
     # Import model class
     module = importlib.import_module(
-        f"src.models.{model_name}"
+        f"src.models.{model_type}"
     )  # loads file src/models/{model_type}.py
     model_class = getattr(
         module, model_name
