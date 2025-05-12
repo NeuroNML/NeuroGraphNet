@@ -56,12 +56,15 @@ def main():
         f"configs/{args.config}"
     )  # Accepts nested structure and dot notation
     run_name = generate_run_name(config)  # Generate run name
+    log(f"Run name: {run_name}")
     # --- Initialize W&B run --- #
     wandb.init(
         project="eeg-seizure",
         config=OmegaConf.to_container(config, resolve=True),
         name=run_name,
     )
+
+    log("wandb login successful")
 
     # -------- Define directories -------- #
 
@@ -99,7 +102,7 @@ def main():
     )
 
     # Check the length of the dataset
-    print(f"Length of train_dataset: {len(train_dataset)}")
+    log(f"Length of train_dataset: {len(train_dataset)}")
 
     # --------------- Split dataset intro train/val/test --------------- #
     train_ids, val_ids = train_test_split(
@@ -153,6 +156,7 @@ def main():
     best_val_f1 = 0
     patience = 20
     counter = 0
+    log("Training started")
 
     for epoch in range(1, config.epochs + 1):
         # ------- Training ------- #
@@ -222,7 +226,7 @@ def main():
                 print("Early stopping triggered.")
                 break
 
-    print(f"Best Validation F1: {best_val_f1:.4f}")
+    log(f"Best Validation F1: {best_val_f1:.4f}")
 
     # Loads best stats in W&B
     wandb.run.summary["best_val_f1"] = best_val_f1
