@@ -31,11 +31,11 @@ from torch_geometric.loader import DataLoader
 # Add the root directory to path
 project_root = (
     Path(__file__).resolve().parents[1]
-)  # 1 levels up from scripts/ -> repository root
+)  # 1 levels up from scripts/ -> repository root ; should directly see src, data, configs
 sys.path.append(str(project_root))
 from src.data.dataset import GraphEEGDataset
 from src.utils.models_funcs import build_model
-from src.utils.general_funcs import log
+from src.utils.general_funcs import log, generate_run_name
 
 
 # --------------------------------------------- Main function ---------------------------------------------------------#a
@@ -44,23 +44,23 @@ from src.utils.general_funcs import log
 def main():
 
     # --- Parse config file path from command line --- #
-    """
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="config.yaml")
+    parser.add_argument(
+        "--config", type=str, default="gcn.yaml"
+    )  # config attribute for args object
     args = parser.parse_args()
 
     # --- Load config --- #
-    with open(args.config, "r") as f:
-        default_config = yaml.safe_load(f)
-    """
-    # --- Load config --- #
-    # run_config = OmegaConf.load(args.config)
     config = OmegaConf.load(
-        "./configs/gcn.yaml"
+        f"configs/{args.config}"
     )  # Accepts nested structure and dot notation
+    run_name = generate_run_name(config)  # Generate run name
     # --- Initialize W&B run --- #
     wandb.init(
-        project="eeg-seizure", config=OmegaConf.to_container(config, resolve=True)
+        project="eeg-seizure",
+        config=OmegaConf.to_container(config, resolve=True),
+        name=run_name,
     )
 
     # -------- Define directories -------- #
@@ -73,7 +73,7 @@ def main():
 
     # ----------------- Prepare training data -----------------#
 
-    clips_tr = pd.read_parquet(train_dir_metadata)[:1000]
+    clips_tr = pd.read_parquet(train_dir_metadata)
     clips_tr = clips_tr[~clips_tr.label.isna()]  # Filter NaN values out of clips_tr
 
     # -------------- Dataset definition -------------- #
