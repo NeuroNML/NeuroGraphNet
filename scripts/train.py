@@ -61,7 +61,9 @@ def main():
     # --- Initialize W&B run --- #
     wandb.init(
         project="eeg-seizure",
-        config=OmegaConf.to_container(config, resolve=True),
+        config=OmegaConf.to_container(
+            config, resolve=True, structured=True
+        ),  # structured=True to keep the nested structure
         name=run_name,
     )
 
@@ -148,7 +150,7 @@ def main():
 
     # -------- Initialize optimizer and loss function -------- #
     optimizer = optim.Adam(
-        model.parameters(), lr=config.learning_rate
+        model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
     )  # Adam with weight decay
     loss_fn = nn.BCEWithLogitsLoss()  # Applies sigmoid implicitly
 
