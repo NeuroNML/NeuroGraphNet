@@ -230,6 +230,7 @@ def main():
     log(f"Best Validation F1: {best_val_f1:.4f}")
 
     # Loads best stats in W&B
+    log("Saving best metrics and model")
     wandb.run.summary["best_val_f1"] = best_val_f1
     wandb.run.summary["best_val_f1_epoch"] = best_val_f1_epoch
 
@@ -245,6 +246,8 @@ def main():
 
     #   Delete file after logging
     os.remove(model_path)
+
+    wandb.finish()  # Close the W&B run
 
 
 if __name__ == "__main__":
