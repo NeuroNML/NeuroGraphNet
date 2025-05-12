@@ -164,6 +164,7 @@ def main():
         total_loss = 0
         # for batch in tqdm(train_loader,desc=f"Epoch {epoch} — Training" ):
         for batch in train_loader:
+            batch = batch.to(device)  # Move batch to GPU
             optimizer.zero_grad()
             out = model(batch.x, batch.edge_index, batch.batch)
             loss = loss_fn(
@@ -182,7 +183,7 @@ def main():
 
         with torch.no_grad():
             for batch in val_loader:
-                batch = batch.to(device)
+                batch = batch.to(device)  # Move batch to GPU
                 out = model(
                     batch.x, batch.edge_index, batch.batch
                 )  # batch.batch: [num_nodes_batch] = 19*batch_size -> tells the model which graph each node belongs to
@@ -223,7 +224,7 @@ def main():
         else:
             counter += 1
             if counter >= patience:
-                print("Early stopping triggered.")
+                log("Early stopping triggered.")
                 break
 
     log(f"Best Validation F1: {best_val_f1:.4f}")
