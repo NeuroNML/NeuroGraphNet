@@ -159,6 +159,7 @@ def main():
     # -------- Training loop -------- #
     best_val_loss = float("inf")
     best_val_f1 = 0
+    best_val_f1_epoch = 0
     patience = 10
     counter = 0
     log("Training started")
