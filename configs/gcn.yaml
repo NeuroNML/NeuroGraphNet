@@ -2,7 +2,7 @@ model:
   type: gcn
   name: EEGGCN
   params:
-    hidden_channels: 16
+    hidden_channels: 32
     out_channels: 1
     num_conv_layers: 2
     pooling_type: mean
