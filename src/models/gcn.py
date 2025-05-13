@@ -16,6 +16,7 @@ class EEGGCN(torch.nn.Module):
         num_conv_layers=3,
         pooling_type="mean",
         dropout_prob=0.5,
+        in_channels=3000,
     ):
         """
         Baseline GCN model for EEG classification.
@@ -32,7 +33,7 @@ class EEGGCN(torch.nn.Module):
         self.conv_layers = torch.nn.ModuleList()
 
         # Number of input channels
-        in_channels = 250 * 12  # 3000 - 250Hz sampling rate, 12 s
+        # in_channels = 250 * 12  # 3000 - 250Hz sampling rate, 12 s
         if num_conv_layers == 1:
             self.conv_layers.append(GCNConv(in_channels, out_channels))
         else:
@@ -63,6 +64,10 @@ class EEGGCN(torch.nn.Module):
         Returns:
             Class logits [num_graphs, num_classes]
         """
+        print(f"[DEBUG] x.shape = {x.shape}")
+        print(f"[DEBUG] edge_index.shape = {edge_index.shape}")
+        print(f"[DEBUG] batch.shape = {batch.shape}")
+        print(f"[DEBUG] conv layer 0 in_channels = {self.conv_layers[0].in_channels}")
         # Input x: [total_nodes, in_channels]
         for i in range(self.num_conv_layers - 1):
             x = self.conv_layers[i](
