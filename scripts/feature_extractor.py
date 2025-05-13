@@ -95,11 +95,11 @@ if __name__ == "__main__":
 
     # -------------------- Check correct values --------------------------------------#
     print("Final dataset shapes:")
-    # print("X_train:", X_train.shape)
+    print("X_train:", X_train.shape)
     # print("y_train:", y_train.shape)
     print("X_test:", X_test.shape)
 
     # ------------------------- Save arrays ---------------------------------------------#
     np.save(DATA_ROOT / "extracted_features/X_test.npy", X_test)
-    # np.save(DATA_ROOT / "extracted_features/X_train.npy", X_train)
+    np.save(DATA_ROOT / "extracted_features/X_train.npy", X_train)
     # np.save(DATA_ROOT / "labels/y_train.npy", y_train)
