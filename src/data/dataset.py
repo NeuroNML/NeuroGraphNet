@@ -1,5 +1,6 @@
 # --------------------------------------- General imports ---------------------------------------#
 import os.path as osp
+import os
 from typing import Optional, Dict, Tuple, List
 
 import pandas as pd
@@ -161,6 +162,9 @@ class GraphEEGDataset(Dataset):
                 # Create edges based on the selected strategy
                 edge_index = self._create_edges(segment_signal)
 
+                if edge_index.shape == torch.Size([0]):
+                    continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
+
                 # Create label tensor
                 y = torch.tensor(
                     [row["label"]], dtype=torch.float
@@ -306,5 +310,13 @@ class GraphEEGDataset(Dataset):
         """
         Returns the names of all processed files.
         """
-        num_files = []
-        return [f"data_{i}.pt" for i in range(len(self.clips))]
+
+        # return [f"data_{i}.pt" for i in range(len(self.clips))]
+        return sorted(
+            [
+                f
+                for f in os.listdir(self.processed_dir)
+                if f.startswith("data_")
+                and f.endswith(".pt")  # Guard against other files
+            ]
+        )

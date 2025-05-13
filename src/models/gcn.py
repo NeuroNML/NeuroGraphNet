@@ -64,10 +64,7 @@ class EEGGCN(torch.nn.Module):
         Returns:
             Class logits [num_graphs, num_classes]
         """
-        print(f"[DEBUG] x.shape = {x.shape}")
-        print(f"[DEBUG] edge_index.shape = {edge_index.shape}")
-        print(f"[DEBUG] batch.shape = {batch.shape}")
-        print(f"[DEBUG] conv layer 0 in_channels = {self.conv_layers[0].in_channels}")
+
         # Input x: [total_nodes, in_channels]
         for i in range(self.num_conv_layers - 1):
             x = self.conv_layers[i](
