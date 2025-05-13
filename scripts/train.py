@@ -219,6 +219,8 @@ def main():
         )
         # ------- Record best F1 score ------- #
         if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
+            best_val_f1_epoch = epoch
             # Load best stats in wandb
             wandb.summary["best_f1_score"] = val_f1
             wandb.summary["f1_score_epoch"] = epoch
