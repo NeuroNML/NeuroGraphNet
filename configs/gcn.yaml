@@ -7,7 +7,7 @@ model:
     num_conv_layers: 2
     pooling_type: mean
     dropout_prob: 0.5
-    in_channels: 3000
+    in_channels: 12
 
 batch_size: 32
 learning_rate: 0.001
