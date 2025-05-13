@@ -218,8 +218,9 @@ def main():
         )
         # ------- Record best F1 score ------- #
         if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
-            best_val_f1_epoch = epoch
+            # Load best stats in wandb
+            wandb.summary["best_f1_score"] = val_f1
+            wandb.summary["f1_score_epoch"] = epoch
         # ------- Early Stopping ------- #
         if avg_val_loss < best_val_loss:
             # Save best statistics and model
@@ -233,11 +234,6 @@ def main():
                 break
 
     log(f"Best validation F1: {best_val_f1:.4f} at epoch {best_val_f1_epoch}")
-
-    # Loads best stats in W&B
-    log("Saving best metrics and model")
-    wandb.run.summary["best_f1"] = best_val_f1
-    wandb.run.summary["best_f1_epoch"] = best_val_f1_epoch
 
     #  -------------- Save best model ------------------#
     # -------------- Save best model ------------------ #
