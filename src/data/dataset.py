@@ -89,6 +89,8 @@ class GraphEEGDataset(Dataset):
             "PZ",
         ]
 
+        self.n_channels = len(self.channels)  # Number of EEG channels
+
         # Define frequency filters
         self.bp_filter = signal.butter(
             4,
@@ -144,8 +146,10 @@ class GraphEEGDataset(Dataset):
         idx = 0
         for index, segment_signal in enumerate(
             self.extracted_features
-        ):  # (num_features, num_electrodes)
-            segment_signal = segment_signal.T  # (electrodes, features)
+        ):  # (samples, extracted_features*electrodes)
+            segment_signal = segment_signal.reshape(
+                self.n_channels, -1
+            )  # (channels, features)
             x = torch.tensor(segment_signal, dtype=torch.float)
             # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
 
