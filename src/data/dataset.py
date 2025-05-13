@@ -22,6 +22,8 @@ class GraphEEGDataset(Dataset):
         root: str,
         clips: pd.DataFrame,
         signal_folder: str,
+        extracted_features: np.ndarray,
+        selected_features_train: bool,
         edge_strategy: str = "spatial",
         spatial_distance_file: Optional[str] = None,
         correlation_threshold: float = 0.7,
@@ -52,6 +54,8 @@ class GraphEEGDataset(Dataset):
         self.clips = clips
         self.signal_folder = signal_folder
         self.force_reprocess = force_reprocess
+        self.extracted_features = extracted_features
+        self.selected_features_train = selected_features_train
         self.bandpass_frequencies = bandpass_frequencies
         self.edge_strategy = edge_strategy
         self.spatial_distance_file = spatial_distance_file
@@ -104,8 +108,11 @@ class GraphEEGDataset(Dataset):
 
         super().__init__(root, transform=None, pre_transform=None, pre_filter=None)
 
-        if self.force_reprocess:
-            self.process()
+        if self.force_reprocess is True:
+            if self.selected_features_train is True:
+                self.process_features()
+            elif self.selected_features_train is False:
+                self.process_sessions()
 
     def _load_spatial_distances(self) -> Dict:
         """
@@ -130,7 +137,41 @@ class GraphEEGDataset(Dataset):
 
         return spatial_distances
 
-    def process(self):
+    def process_features(self):
+        """
+        Processes extracted features from samples into PyTorch Geometric Data objects.
+        """
+        idx = 0
+        for index, segment_signal in enumerate(
+            self.extracted_features
+        ):  # (num_features, num_electrodes)
+            segment_signal = segment_signal.T  # (electrodes, features)
+            x = torch.tensor(segment_signal, dtype=torch.float)
+            # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
+
+            # Create edges based on the selected strategy
+            edge_index = self._create_edges(segment_signal)
+
+            if edge_index.shape == torch.Size([0]):
+                continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
+
+            # Create label tensor
+            y = torch.tensor(
+                [self.clips["label"].values[index]], dtype=torch.float
+            )  # BCELoss expects float labels
+
+            # Create Data object
+            data = Data(
+                x=x,  # Node features: channels x time points
+                edge_index=edge_index,  # Edges between channels
+                y=y,  # Label
+            )
+
+            # Save processed data
+            torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
+            idx += 1
+
+    def process_sessions(self):
         """
         Processes raw data into PyTorch Geometric Data objects.
         """
@@ -138,7 +179,6 @@ class GraphEEGDataset(Dataset):
             self.clips.groupby(["patient", "session"])
         )  # List of tuples: ((patient_id, session_id), session_df)
         idx = 0
-
         for (_, _), session_df in sessions:
             # Load signal data (for complete session)
             session_signal = pd.read_parquet(
@@ -167,7 +207,7 @@ class GraphEEGDataset(Dataset):
 
                 # Create label tensor
                 y = torch.tensor(
-                    [row["label"]], dtype=torch.float
+                    [self.clips["label"].values[idx]], dtype=torch.float
                 )  # BCELoss expects float labels
 
                 # Create Data object

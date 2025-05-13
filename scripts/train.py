@@ -74,17 +74,21 @@ def main():
     train_dir_metadata = train_dir / "segments.parquet"
     train_dataset_dir = DATA_ROOT / "graph_dataset_train"
     spatial_distance_file = DATA_ROOT / "distances_3d.csv"
+    extracted_features_dir = DATA_ROOT / "extracted_features"
 
     # ----------------- Prepare training data -----------------#
 
     clips_tr = pd.read_parquet(train_dir_metadata)
     clips_tr = clips_tr[~clips_tr.label.isna()]  # Filter NaN values out of clips_tr
+    extracted_features = np.load(extracted_features_dir / "X_train.npy")
 
     # -------------- Dataset definition -------------- #
     train_dataset = GraphEEGDataset(
         root=train_dataset_dir,
         clips=clips_tr,
         signal_folder=train_dir,
+        extracted_features=extracted_features,
+        selected_features_train=True,
         edge_strategy=config.edge_strategy,
         spatial_distance_file=(
             spatial_distance_file if config.edge_strategy == "spatial" else None
