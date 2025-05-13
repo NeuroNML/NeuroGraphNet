@@ -16,7 +16,7 @@ if __name__ == "__main__":
     # --------------------- Custom imports --------------------- #
     # Absolute paths - add utils directory to path
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    from utils.preprocessing_funcs import process_session
+    from src.utils.preprocessing_funcs import process_session
 
     # --------------- Define path to extract clips -----------------------------------
 
