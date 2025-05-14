@@ -150,6 +150,10 @@ class GraphEEGDataset(Dataset):
             segment_signal = segment_signal.reshape(
                 self.n_channels, -1
             )  # (channels, features)
+            # Normalize features
+            mean = segment_signal.mean(axis=0, keepdims=True)
+            std = segment_signal.std(axis=0, keepdims=True) + 1e-6  # to avoid div by 0
+            segment_signal = (segment_signal - mean) / std
             x = torch.tensor(segment_signal, dtype=torch.float)
             # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
 
