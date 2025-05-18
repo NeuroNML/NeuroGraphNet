@@ -6,6 +6,111 @@ from torch_geometric.data import Dataset, Data
 from typing import Optional, Callable, List, Union, Dict
 import networkx as nx
 
+def ensure_eeg_multiindex(df: pd.DataFrame, id_col_name: Optional[str] = 'id') -> pd.DataFrame:
+    """
+    Ensures the DataFrame has a MultiIndex with levels ['patient', 'session', 'clip', 'segment'].
+
+    If the DataFrame does not have this specific MultiIndex, this function attempts to create it.
+    It uses the column specified by `id_col_name` for the string IDs if the column exists.
+    If `id_col_name` is None or the column doesn't exist, it tries to use the DataFrame's
+    current index if it's a simple (non-MultiIndex) index containing the string IDs.
+
+    The ID format is expected to be: <patient_id>_s<session_no>_t<clip_no>_<segment_no>
+    Example: 'pqejgcff_s001_t000_0'
+
+    Args:
+        df (pd.DataFrame): The input DataFrame.
+        id_col_name (Optional[str]): The name of the column containing the string IDs.
+                                     If None, or if the column is not found, the function
+                                     will try to use the existing simple index.
+
+    Returns:
+        pd.DataFrame: A new DataFrame with the ensured MultiIndex.
+                      The original DataFrame is not modified.
+
+    Raises:
+        ValueError: If a valid source for IDs cannot be determined or if IDs are malformed.
+    """
+    df_out = df.copy()  # Work on a copy
+    desired_names = ['patient', 'session', 'clip', 'segment']
+
+    # Check if the DataFrame already has the desired MultiIndex
+    if isinstance(df_out.index, pd.MultiIndex) and list(df_out.index.names) == desired_names:
+        return df_out
+
+    id_series: Optional[pd.Series] = None
+
+    # Strategy 1: Use the specified id_col_name if it exists as a column
+    if id_col_name and id_col_name in df_out.columns:
+        id_series = df_out[id_col_name]
+    # Strategy 2: Use the current index if id_col_name is None (or col not found)
+    # AND current index is simple (not a MultiIndex)
+    elif not isinstance(df_out.index, pd.MultiIndex):
+        if id_col_name and df_out.index.name != id_col_name:
+            # id_col_name was specified but not found as a column.
+            # The current index name also doesn't match.
+            # We proceed using the current simple index but warn the user.
+            print(f"Warning: ID column '{id_col_name}' not found. "
+                  f"Using current simple index (name: '{df_out.index.name}') as ID source.")
+        elif df_out.index.name:
+            print(f"Using current simple index (name: '{df_out.index.name}') as ID source.")
+        else:
+            print("Using current unnamed simple index as ID source.")
+        # Create a Series from the index, ensuring it aligns with df_out for safety
+        id_series = pd.Series(df_out.index.values, index=df_out.index)
+    else:
+        # This case means:
+        # 1. df_out.index IS a MultiIndex, but not the desired one (checked at the start).
+        # 2. AND (id_col_name was None OR id_col_name was not in df_out.columns).
+        # In this situation, we cannot proceed without a clear source for the original string IDs.
+        raise ValueError(
+            "DataFrame has a MultiIndex, but it's not the desired one. "
+            f"To recreate the MultiIndex, the original string IDs must be available either in a "
+            f"column (specify `id_col_name`) or the DataFrame should have a simple index of these IDs."
+        )
+
+    if id_series is None:
+        # This should ideally be caught by the logic above, but as a safeguard:
+        raise ValueError(f"Could not determine a valid source for string IDs. "
+                         f"Please check `id_col_name` ('{id_col_name}') and the DataFrame's structure.")
+
+    # Parse the IDs
+    patients, sessions, clips, segments = [], [], [], []
+    for record_id_val in id_series:
+        record_id_str = str(record_id_val)  # Ensure it's a string
+        parts = record_id_str.split('_')
+
+        if len(parts) != 4:
+            raise ValueError(
+                f"ID '{record_id_str}' is not in the expected format "
+                "<patient_id>_s<session_no>_t<clip_no>_<segment_no>. "
+                f"Found {len(parts)} parts: {parts}"
+            )
+        try:
+            patients.append(parts[0])
+            sessions.append(int(parts[1][1:]))  # Remove 's' and convert to int
+            clips.append(int(parts[2][1:]))     # Remove 't' and convert to int
+            segments.append(int(parts[3]))
+        except (ValueError, IndexError) as e:
+            # ValueError for int conversion, IndexError if parts[x] is too short (e.g. 's' missing)
+            raise ValueError(f"Error parsing components of ID '{record_id_str}': {e}") from e
+
+    # Create the new MultiIndex
+    new_multiindex = pd.MultiIndex.from_arrays(
+        [patients, sessions, clips, segments],
+        names=desired_names
+    )
+
+    # Ensure the new index has the same length as the DataFrame
+    if len(new_multiindex) != len(df_out):
+        # This is an internal consistency check and should not be triggered if id_series is derived correctly.
+        raise AssertionError(
+            f"Internal error: Mismatch between the length of the new MultiIndex ({len(new_multiindex)}) "
+            f"and the DataFrame's number of rows ({len(df_out)})."
+        )
+
+    df_out.index = new_multiindex
+    return df_out
 
 class GraphEEGDataset(Dataset):
     def __init__(
