@@ -1,6 +1,4 @@
 # Avoid pushing datasets to remote (6GB is a lot)
-data/
 .venv/
-*.csv
 *.parquet
 __pycache__
