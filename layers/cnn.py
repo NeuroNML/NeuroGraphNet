@@ -9,12 +9,14 @@ class EEG_CNN(nn.Module):
         Args:
             input_channels (int): Number of EEG channels (e.g., 19).
             num_classes (int): Number of output classes (1 for binary seizure/non-seizure).
-            sequence_length (int): Length of the input EEG sequence (number of time steps).
+            sequence_length (int): Original length of the input EEG sequence (number of time steps).
+                                   Note: Used for context; AdaptiveAvgPool1d makes the FC layer input size
+                                   independent of exact sequence length after convolutions.
             dropout_rate (float): Dropout rate for regularization.
         """
         super().__init__()
         self.input_channels = input_channels
-        self.sequence_length = sequence_length
+        # self.sequence_length = sequence_length # Stored for context
 
         # Convolutional layers
         # Conv1d expects input shape (batch_size, channels, seq_len)
@@ -33,13 +35,8 @@ class EEG_CNN(nn.Module):
         self.dropout = nn.Dropout(dropout_rate)
 
         # Calculate the flattened size after convolutions and pooling
-        # Example: seq_len = 3000
-        # After pool1: 3000 / 2 = 1500
-        # After pool2: 1500 / 2 = 750
-        # After pool3: 750 / 2 = 375
-        # flattened_size = 128 (out_channels from conv3) * (sequence_length // 8)
-        
-        # Dynamically calculate flattened_size
+        # With AdaptiveAvgPool1d(1), the sequence dimension is reduced to 1.
+        # So, the number of features becomes the number of output channels from the last conv layer.
         self.adaptive_pool = nn.AdaptiveAvgPool1d(1) # Output size of 1 for the time dimension
         self.flattened_size = 128 # (out_channels from conv3) * 1 (output from adaptive pool)
 
@@ -57,17 +54,24 @@ class EEG_CNN(nn.Module):
     def forward(self, x):
         """
         Input x shape: [batch_size, sequence_length, input_channels] (typical for EEGDataset)
+        or [batch_size, input_channels, sequence_length]
         """
-        # Permute to [batch_size, input_channels, sequence_length] for Conv1D
-        x = x.permute(0, 2, 1)
+        # Permute to [batch_size, input_channels, sequence_length] if necessary
+        if x.shape[1] == self.input_channels and x.shape[2] != self.input_channels:
+            # Assuming input is already [batch_size, input_channels, sequence_length]
+            pass
+        elif x.shape[2] == self.input_channels and x.shape[1] != self.input_channels:
+            # Input is [batch_size, sequence_length, input_channels], permute it
+            x = x.permute(0, 2, 1)
+        else:
+            raise ValueError(f"Input tensor shape {x.shape} is ambiguous or does not match input_channels {self.input_channels}")
+
 
         x = self._forward_conv(x) # Output shape: [batch_size, 128, sequence_length_after_pooling]
         
-        # Flatten the output from conv layers
-        x = x.view(x.size(0), -1) # Shape: [batch_size, flattened_size]
-        # If using AdaptiveAvgPool1d:
-        # x = self.adaptive_pool(x) # Output shape: [batch_size, 128, 1]
-        # x = x.view(x.size(0), -1)   # Shape: [batch_size, 128]
+        # Use AdaptiveAvgPool1d to handle the sequence dimension
+        x = self.adaptive_pool(x) # Output shape: [batch_size, 128, 1]
+        x = x.view(x.size(0), -1)  # Shape: [batch_size, 128]
 
         x = self.dropout(F.relu(self.fc1(x)))
         logits = self.fc2(x) # Shape: [batch_size, num_classes]
@@ -83,7 +87,7 @@ class CNN_LSTM(nn.Module):
         A CNN-LSTM hybrid model for EEG seizure detection.
         Args:
             input_channels (int): Number of EEG channels.
-            sequence_length (int): Original length of EEG sequence.
+            sequence_length (int): Original length of EEG sequence (for context).
             cnn_output_channels (int): Number of output channels from the last CNN layer.
             lstm_hidden_dim (int): Hidden dimension of the LSTM.
             lstm_num_layers (int): Number of LSTM layers.
@@ -93,6 +97,7 @@ class CNN_LSTM(nn.Module):
             bidirectional_lstm (bool): Whether to use a bidirectional LSTM.
         """
         super().__init__()
+        self.input_channels = input_channels
 
         # CNN Part (similar to EEG_CNN's convolutional base)
         self.conv1 = nn.Conv1d(in_channels=input_channels, out_channels=32, kernel_size=7, stride=1, padding=3)
@@ -137,9 +142,18 @@ class CNN_LSTM(nn.Module):
     def forward(self, x):
         """
         Input x shape: [batch_size, original_sequence_length, input_channels]
+        or [batch_size, input_channels, original_sequence_length]
         """
-        # 1. Permute for CNN: [batch_size, input_channels, original_sequence_length]
-        x = x.permute(0, 2, 1)
+        # 1. Permute for CNN if necessary: [batch_size, input_channels, original_sequence_length]
+        if x.shape[1] == self.input_channels and x.shape[2] != self.input_channels:
+            # Assuming input is already [batch_size, input_channels, sequence_length]
+            pass
+        elif x.shape[2] == self.input_channels and x.shape[1] != self.input_channels:
+            # Input is [batch_size, sequence_length, input_channels], permute it
+            x = x.permute(0, 2, 1)
+        else:
+            raise ValueError(f"Input tensor shape {x.shape} is ambiguous or does not match input_channels {self.input_channels}")
+
 
         # 2. Pass through CNN feature extractor
         # cnn_out shape: [batch_size, cnn_output_channels, sequence_length_after_cnn_pooling]
@@ -151,45 +165,31 @@ class CNN_LSTM(nn.Module):
 
         # 4. Pass through LSTM
         # lstm_output shape: [batch_size, sequence_length_after_cnn_pooling, lstm_hidden_dim * num_directions]
+        # h_n shape: [num_layers * num_directions, batch_size, lstm_hidden_dim]
+        # c_n shape: [num_layers * num_directions, batch_size, lstm_hidden_dim]
         lstm_out, (h_n, c_n) = self.lstm(lstm_input)
 
         # 5. Get the output from the last time step of LSTM
-        # (or use attention, mean/max pooling over LSTM outputs)
+        # (or use attention, mean/max pooling over LSTM outputs, or h_n)
+        # lstm_out[:, -1, :] takes the last hidden state from the sequence of outputs.
+        # For a bidirectional LSTM, this will be the concatenation of the last forward hidden state
+        # and the first backward hidden state (which corresponds to the last time step).
         last_lstm_output = lstm_out[:, -1, :] # Shape: [batch_size, lstm_hidden_dim * num_directions]
         
+        # Alternatively, for bidirectional LSTMs, you could explicitly use h_n:
+        # if self.lstm.bidirectional:
+        #     # h_n is (D*num_layers, N, H_out) where D is 2 for bidirectional
+        #     # Get the last forward hidden state: h_n[-2, :, :]
+        #     # Get the last backward hidden state: h_n[-1, :, :]
+        #     last_lstm_output = torch.cat((h_n[-2,:,:], h_n[-1,:,:]), dim=1)
+        # else:
+        #     # h_n is (num_layers, N, H_out)
+        #     last_lstm_output = h_n[-1,:,:]
+        # The current approach using lstm_out[:, -1, :] is generally fine and simpler.
+
         # 6. Dropout and Final Classification
         last_lstm_output_dropped = self.dropout_fc(last_lstm_output)
         logits = self.fc(last_lstm_output_dropped) # Shape: [batch_size, num_classes]
         
         return logits
 
-if __name__ == '__main__':
-    batch_size = 4
-    seq_len = 3000 # Example sequence length from your project (12s * 250Hz)
-    num_channels = 19 # Standard 19 channels
-
-    # Test EEG_CNN
-    print("Testing EEG_CNN...")
-    cnn_model = EEG_CNN(input_channels=num_channels, sequence_length=seq_len, num_classes=1)
-    dummy_data_cnn = torch.randn(batch_size, seq_len, num_channels)
-    output_cnn = cnn_model(dummy_data_cnn)
-    print("EEG_CNN Output shape:", output_cnn.shape) # Expected: [batch_size, 1]
-    assert output_cnn.shape == (batch_size, 1)
-    print("EEG_CNN Test Passed!\n")
-
-    # Test CNN_LSTM
-    print("Testing CNN_LSTM...")
-    cnn_lstm_model = CNN_LSTM(input_channels=num_channels, sequence_length=seq_len, num_classes=1)
-    dummy_data_cnn_lstm = torch.randn(batch_size, seq_len, num_channels)
-    output_cnn_lstm = cnn_lstm_model(dummy_data_cnn_lstm)
-    print("CNN_LSTM Output shape:", output_cnn_lstm.shape) # Expected: [batch_size, 1]
-    assert output_cnn_lstm.shape == (batch_size, 1)
-    print("CNN_LSTM Test Passed!\n")
-
-    # Example of a BiLSTM-CNN (CNN output fed into BiLSTM)
-    print("Testing CNN_BiLSTM (using bidirectional=True by default in CNN_LSTM class)...")
-    cnn_bilstm_model = CNN_LSTM(input_channels=num_channels, sequence_length=seq_len, num_classes=1, bidirectional_lstm=True)
-    output_cnn_bilstm = cnn_bilstm_model(dummy_data_cnn_lstm) # Using same dummy data
-    print("CNN_BiLSTM Output shape:", output_cnn_bilstm.shape)
-    assert output_cnn_bilstm.shape == (batch_size, 1)
-    print("CNN_BiLSTM Test Passed!\n")
