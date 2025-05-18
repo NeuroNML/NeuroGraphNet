@@ -4,11 +4,11 @@
 #SBATCH --output=eeg_jupyter_%j.log
 #SBATCH --partition=gpu
 #SBATCH --account=ee-452
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=20
-#SBATCH --mem=32G
+#SBATCH --mem=32GB
 #SBATCH --time=02:00:00
 
 echo "Loading modules…"
