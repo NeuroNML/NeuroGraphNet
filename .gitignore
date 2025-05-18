@@ -2,3 +2,9 @@
 .venv/
 *.parquet
 __pycache__
+
+# avoid pushing jupyter checkpoints
+.ipynb_checkpoints
+
+# log files
+*.log
