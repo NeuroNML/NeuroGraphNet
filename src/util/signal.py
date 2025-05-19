@@ -17,7 +17,7 @@ def time_filtering(x):
 
     return x_filt.copy()
 
-def normalize(self, signal):
+def normalize(signal):
         mean = np.mean(signal, axis=0, keepdims=True)
         std = np.std(signal, axis=0, keepdims=True)
         return (signal - mean) / (std + 1e-6)
