@@ -8,3 +8,7 @@ __pycache__
 
 # log files
 *.log
+
+# avoid pushing processed segments cached
+data/graph_dataset
+data/graph_dataset/*
