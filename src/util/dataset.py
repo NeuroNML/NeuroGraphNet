@@ -10,7 +10,7 @@ from scipy import signal
 import torch
 from torch_geometric.data import Dataset, Data
 
-from util.filter import time_filtering
+from src.util.signal import time_filtering
 
 def ensure_eeg_multiindex(df: pd.DataFrame, id_col_name: Optional[str] = 'id') -> pd.DataFrame:
     """

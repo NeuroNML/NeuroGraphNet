@@ -17,6 +17,10 @@ def time_filtering(x):
 
     return x_filt.copy()
 
+def normalize(self, signal):
+        mean = np.mean(signal, axis=0, keepdims=True)
+        std = np.std(signal, axis=0, keepdims=True)
+        return (signal - mean) / (std + 1e-6)
 
 def fft_filtering(x: np.ndarray) -> np.ndarray:
     """Compute FFT and only keep the frequencies between 0.5 and 30Hz"""
