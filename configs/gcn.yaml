@@ -16,6 +16,7 @@ epochs: 200
 seed: 42
 oversampling_power: 1
 edge_strategy: correlation
+top_k : 5
 correlation_threshold: 0.9
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50

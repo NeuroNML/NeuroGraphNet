@@ -28,6 +28,7 @@ class GraphEEGDataset(Dataset):
         edge_strategy: str = "spatial",
         spatial_distance_file: Optional[str] = None,
         correlation_threshold: float = 0.7,
+        top_k: int = None,
         force_reprocess: bool = False,
         bandpass_frequencies: Tuple[float, float] = (0.5, 50),
         segment_length: int = 12 * 250,  # 12 seconds * 250 Hz -> 3000 samples
@@ -59,6 +60,7 @@ class GraphEEGDataset(Dataset):
         self.selected_features_train = selected_features_train
         self.bandpass_frequencies = bandpass_frequencies
         self.edge_strategy = edge_strategy
+        self.top_k = top_k
         self.spatial_distance_file = spatial_distance_file
         self.correlation_threshold = correlation_threshold
         self.segment_length = segment_length
