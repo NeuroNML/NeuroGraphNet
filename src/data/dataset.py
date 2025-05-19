@@ -2,6 +2,7 @@
 import os.path as osp
 import os
 from typing import Optional, Dict, Tuple, List
+from collections import defaultdict
 
 import pandas as pd
 import numpy as np
@@ -152,8 +153,10 @@ class GraphEEGDataset(Dataset):
             )  # (channels, features)
             # Normalize features
             mean = segment_signal.mean(axis=0, keepdims=True)
-            std = segment_signal.std(axis=0, keepdims=True) + 1e-6  # to avoid div by 0
+            std = segment_signal.std(axis=0, keepdims=True) + 1e-6
             segment_signal = (segment_signal - mean) / std
+
+            # ------------------ Create Data object -----------------#
             x = torch.tensor(segment_signal, dtype=torch.float)
             # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
 
@@ -303,35 +306,58 @@ class GraphEEGDataset(Dataset):
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         return edge_index
 
-    def _create_correlation_edges(self, signal_data: pd.DataFrame) -> torch.Tensor:
+    def _create_correlation_edges(
+        self, signal_data: pd.DataFrame, top_k: int = None
+    ) -> torch.Tensor:
         """
         Creates edges based on correlation between channel signals.
 
+        - If: top-k specified: keeps only top-k strongest edges per node.
+        - If not: adds all edges with nodes above correlation threshold
+
         Args:
-            signal_data: DataFrame containing EEG signals
+            signal_data (pd.DataFrame): EEG signal data
+            top_k (int, optional): Number of strongest correlations to keep per node
 
         Returns:
             torch.Tensor: Edge index tensor
         """
-        # Calculate correlation matrix
         corr_matrix = np.abs(np.corrcoef(signal_data))
         if np.isnan(corr_matrix).any():
             raise ValueError("Correlation matrix contains NaNs.")
         if np.isinf(corr_matrix).any():
             raise ValueError("Correlation matrix contains infinite values.")
 
-        # Create edges where correlation exceeds threshold
         edge_list = []
-        for i in range(len(self.channels)):
-            for j in range(len(self.channels)):
-                if j != i and corr_matrix[i, j] >= self.correlation_threshold:
-                    edge_list.append(
-                        [i, j]
-                    )  #  must explicitly add both directions for an undirected edge.
+        num_channels = len(self.channels)
 
-        # Convert to tensor
+        if top_k is not None:
+
+            adj_dict = defaultdict(list)
+
+            for i in range(num_channels):
+                top_indices = np.argsort(-corr_matrix[i])
+                count = 0
+                for j in top_indices:
+                    if i != j and count < top_k:
+                        if j not in adj_dict[i]:
+                            adj_dict[i].append(j)
+                        if i not in adj_dict[j]:
+                            adj_dict[j].append(i)
+                        count += 1
+
+            edge_list = []
+            for i, neighbors in adj_dict.items():
+                for j in neighbors:
+                    edge_list.append([i, j])
+        else:
+            for i in range(num_channels):
+                for j in range(i + 1, num_channels):
+                    if corr_matrix[i, j] >= self.correlation_threshold:
+                        edge_list.append([i, j])
+                        edge_list.append([j, i])
+
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
-        # [num_edges, 2] → [2, num_edges]; contiguous(): for row-major order
         return edge_index
 
     def len(self) -> int:
