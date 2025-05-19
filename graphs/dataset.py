@@ -29,7 +29,7 @@ class GraphEEGDataset(Dataset):
             root: Root directory where the dataset should be saved
             metadata_file: Path to the parquet file containing metadata
             signal_folder: Path to the file/folder mentioned in metadata_file
-            edge_strategy: Strategy to create edges ('spatial' or 'correlation')
+            edge_strategy: Strategy to create edges ('spatial', 'correlation' or 'full')
             spatial_distance_file: Path to file containing spatial distances (required if edge_strategy='spatial')
             correlation_threshold: Threshold for creating edges based on correlation (used if edge_strategy='correlation')
             transform: Transform to be applied to each data object
@@ -60,6 +60,7 @@ class GraphEEGDataset(Dataset):
 
         if self.force_reprocess:
             self.process()
+
 
     def _load_spatial_distances(self, file_path: str) -> Dict:
         """
@@ -233,13 +234,19 @@ class GraphEEGDataset(Dataset):
             return self._create_spatial_edges()
         elif self.edge_strategy == 'correlation':
             return self._create_correlation_edges(signal_data)
+        elif self.edge_strategy == 'full':
+            return self._create_fully_connected_edges(signal_data)
         else:
             raise ValueError(f"Unknown edge strategy: {self.edge_strategy}")
     
-    def _create_spatial_edges(self) -> torch.Tensor:
+    def _create_spatial_edges(self, distance_threshold: float = 1) -> torch.Tensor:
         """
-        Creates edges based on spatial distances between electrodes.
+        Creates edges between electrodes based on spatial distances, only connecting
+        electrodes that are closer than the specified threshold.
         
+        Args:
+            distance_threshold (float): Maximum distance for creating an edge (default: 10.0)
+            
         Returns:
             torch.Tensor: Edge index tensor
         """
@@ -256,16 +263,21 @@ class GraphEEGDataset(Dataset):
             for j, ch2 in enumerate(self.channels):
                 if i < j:  # Avoid duplicate edges
                     # Get distance if available, otherwise use a default
-                    distance = self.spatial_distances.get((ch1, ch2), 1.0)
+                    distance = self.spatial_distances.get((ch1, ch2), float('inf'))
                     
-                    # Add edge if distance is within threshold (you can adjust this logic)
-                    # Here we're adding all edges but you might want to threshold
-                    G.add_edge(i, j, weight=distance)
-                    edge_list.append([i, j])
-                    edge_list.append([j, i])  # Add in both directions for PyG
+                    # Add edge only if distance is within threshold
+                    if distance <= distance_threshold:
+                        G.add_edge(i, j, weight=distance)
+                        edge_list.append([i, j])
+                        edge_list.append([j, i])  # Add in both directions for PyG
         
         # Convert to tensor
-        edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        if edge_list:  # Check if any edges were added
+            edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        else:
+            # Return empty edge index with correct shape if no edges
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+            
         return edge_index
     
     def _create_correlation_edges(self, signal_data: pd.DataFrame) -> torch.Tensor:
@@ -291,6 +303,23 @@ class GraphEEGDataset(Dataset):
         # Convert to tensor
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         return edge_index
+    
+    def _create_fully_connected_edges(self, num_nodes):
+        """
+        Create a fully connected graph (all nodes connected to all others)
+        Used when we want to let the attention mechanism learn the connections
+        """
+        # Generate all possible edges (except self-loops)
+        edges = []
+        for i in range(num_nodes):
+            for j in range(num_nodes):
+                if i != j:  # Avoid self-loops
+                    edges.append([i, j])
+        
+        # Convert to PyTorch format [2, num_edges]
+        edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        return edge_index
+    
 
     def len(self) -> int:
         """
