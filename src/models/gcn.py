@@ -12,7 +12,7 @@ class EEGGCN(torch.nn.Module):
     def __init__(
         self,
         hidden_channels,
-        out_channels,
+        out_channels=64,
         num_conv_layers=3,
         pooling_type="mean",
         dropout_prob=0.5,

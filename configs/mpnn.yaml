@@ -1,0 +1,24 @@
+model:
+  type: mpnn
+  name: EEGMPNN
+  params:
+    hidden_channels: 64
+    out_channels: 64
+    num_mp_layers: 2
+    pooling_message: mean
+    pooling_type: mean
+    dropout_prob: 0.5
+    in_channels: 12
+
+batch_size: 32
+learning_rate: 0.001
+weight_decay: 0.01
+epochs: 200
+seed: 42
+oversampling_power: 1
+
+edge_strategy: correlation
+top_k : 5
+correlation_threshold: 0.9
+low_bandpass_frequency: 0.5
+high_bandpass_frequency: 50
