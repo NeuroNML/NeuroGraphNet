@@ -81,6 +81,7 @@ def main():
     clips_tr = pd.read_parquet(train_dir_metadata)
     clips_tr = clips_tr[~clips_tr.label.isna()]  # Filter NaN values out of clips_tr
     extracted_features = np.load(extracted_features_dir / "X_train.npy")
+    # Normalize features
 
     # -------------- Dataset definition -------------- #
     train_dataset = GraphEEGDataset(
@@ -93,6 +94,7 @@ def main():
         spatial_distance_file=(
             spatial_distance_file if config.edge_strategy == "spatial" else None
         ),
+        top_k=config.top_k,
         correlation_threshold=config.correlation_threshold,
         force_reprocess=True,
         bandpass_frequencies=(
