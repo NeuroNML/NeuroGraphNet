@@ -309,7 +309,7 @@ class GraphEEGDataset(Dataset):
         return edge_index
 
     def _create_correlation_edges(
-        self, signal_data: pd.DataFrame, top_k: int = None
+        self, signal_data: pd.DataFrame
     ) -> torch.Tensor:
         """
         Creates edges based on correlation between channel signals.
@@ -333,7 +333,7 @@ class GraphEEGDataset(Dataset):
         edge_list = []
         num_channels = len(self.channels)
 
-        if top_k is not None:
+        if self.top_k is not None:
 
             adj_dict = defaultdict(list)
 
@@ -341,7 +341,7 @@ class GraphEEGDataset(Dataset):
                 top_indices = np.argsort(-corr_matrix[i])
                 count = 0
                 for j in top_indices:
-                    if i != j and count < top_k:
+                    if i != j and count < self.top_k:
                         if j not in adj_dict[i]:
                             adj_dict[i].append(j)
                         if i not in adj_dict[j]:
