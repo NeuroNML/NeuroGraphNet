@@ -49,6 +49,7 @@ if __name__ == "__main__":
     X_train = []
 
     sessions = list(clips_tr.groupby(["patient", "session"]))
+    sample_subject_list = clips_tr.reset_index().patient.values
 
     features = Parallel(n_jobs=-1)(
         delayed(process_session)(
@@ -96,10 +97,14 @@ if __name__ == "__main__":
     # -------------------- Check correct values --------------------------------------#
     print("Final dataset shapes:")
     print("X_train:", X_train.shape)
-    # print("y_train:", y_train.shape)
+    print("y_train:", y_train.shape)
     print("X_test:", X_test.shape)
 
     # ------------------------- Save arrays ---------------------------------------------#
     np.save(DATA_ROOT / "extracted_features/X_test.npy", X_test)
     np.save(DATA_ROOT / "extracted_features/X_train.npy", X_train)
-    # np.save(DATA_ROOT / "labels/y_train.npy", y_train)
+    np.save(
+        DATA_ROOT / "extracted_features/sample_subject_array.npy", sample_subject_list
+    )
+
+    np.save(DATA_ROOT / "labels/y_train.npy", y_train)

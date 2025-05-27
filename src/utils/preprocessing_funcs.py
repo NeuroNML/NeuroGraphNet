@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from scipy import signal
 from scipy.signal import welch
 
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import f1_score, confusion_matrix, ConfusionMatrixDisplay
 from sklearn.base import clone
@@ -65,7 +65,7 @@ def spectral_entropy(psd):
 
 
 # --------------------------- Feature extractor ----------------------------------------------#
-def extract_features(signal, session, start, end, fs=250):
+def extract_features(signal, fs=250):
     """
     Extract EEG features.
     signal : ndarray (time, channels), already re-referenced
@@ -133,10 +133,12 @@ def extract_features(signal, session, start, end, fs=250):
 
     # Convert to np and create guardarail for NaN
     features = np.asarray(features, dtype=float)
+    """
     if np.any(np.isnan(features)):
         print("NaN detected in extracted features.")
         print(f"Session: {session} | Start: {start} | End: {end}")
         features = np.nan_to_num(features, nan=0.0)
+    """
 
     return features
 
@@ -144,21 +146,11 @@ def extract_features(signal, session, start, end, fs=250):
 # ---------------------- Function to process one session to extract features -------------------------------#
 
 
-def process_session(
-    session,
-    signal_path,
-    bp_filter,
-    notch_filter,
-    segment_len=250 * 12,
-    f_s=250,
-):
+def process_session(session_df, signal_path, bp_filter, notch_filter, f_s=250):
     features_list = []
 
     # Load signal and extract the window
     session_signal = pd.read_parquet(signal_path)
-    # session_t0 = int(session.iloc[0]["start_time"] * f_s)
-    # session_tf = int(session.iloc[-1]["end_time"] * f_s)
-    # session_signal = signal_session.iloc[session_t0:session_tf].values
 
     # Filter
     session_signal = time_filtering(
@@ -178,10 +170,11 @@ def process_session(
     session_signal = (session_signal - mean) / (std + eps)
 
     # Segment and extract
-    for i, start in enumerate(range(0, len(session_signal), segment_len)):
-        end = start + segment_len
-        segment = session_signal[start:end]
-        features = extract_features(segment, session, start, end)
+    for _, row in session_df.iterrows():
+        t0 = int(row["start_time"] * f_s)
+        tf = int(row["end_time"] * f_s)
+        segment = session_signal[t0:tf]
+        features = extract_features(segment)
         features_list.append(features)
 
     return features_list
@@ -195,6 +188,7 @@ def model_evaluation(
     model,
     X,
     y,
+    sample_subject_array,
     n_features,
     n_splits=5,
     random_state=42,
@@ -210,11 +204,17 @@ def model_evaluation(
     f1_scores, conf_matrices = [], []
     importances = []
 
-    kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-    # Use StratifiedKFold to preserve class proportions in each fold
+    kf = StratifiedGroupKFold(
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=random_state,
+    )
+    # Use Stratified to preserve class proportions in each fold; Group: so same patient is not in both training and validation
 
     for train_idx, val_idx in tqdm(
-        kf.split(X, y), total=kf.get_n_splits(), desc="CV folds"
+        kf.split(X, y, groups=sample_subject_array),
+        total=kf.get_n_splits(),
+        desc="CV folds",
     ):
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
