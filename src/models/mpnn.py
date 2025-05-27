@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch.nn import Linear, BatchNorm1d, Dropout, Sequential, ReLU
+from torch_scatter import scatter_add, scatter_mean, scatter_max
 
 # Custom imports
 from src.utils.models_funcs import pooling
@@ -147,11 +148,11 @@ class MessagePassing(torch.nn.Module):
         
         # Aggregate messages for each target node
         if self.aggr == "add":
-            aggregated = torch.scatter_add(message, target, dim=0, dim_size=x.size(0))
+            aggregated = scatter_add(message, target, dim=0, dim_size=x.size(0))
         elif self.aggr == "mean":
-            aggregated = torch.scatter_mean(message, target, dim=0, dim_size=x.size(0))
+            aggregated = scatter_mean(message, target, dim=0, dim_size=x.size(0))
         elif self.aggr == "max":
-            aggregated = torch.scatter_max(message, target, dim=0, dim_size=x.size(0))[0]
+            aggregated = scatter_max(message, target, dim=0, dim_size=x.size(0))[0]
         else:
             raise ValueError(f"Unsupported aggregation type: {self.aggr}")
         
