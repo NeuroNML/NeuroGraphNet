@@ -1,0 +1,32 @@
+model:
+  type: cnn_bilstm_mpnn
+  name: GNN_Encoder
+  encoder:
+    type: cnn_bilstm
+    name: CNN_BiLSTM_Encoder
+    params: {}
+  gnn:
+    type: mpnn
+    name: EEGMPNN
+    params:
+      in_channels: 64
+      hidden_channels: 64
+      out_channels: 64
+      num_mp_layers: 3
+      pooling_message: mean
+      pooling_type: mean
+      dropout_prob: 0
+  
+batch_size: 32
+learning_rate: 0.001
+weight_decay: 0.01
+epochs: 200
+seed: 42
+oversampling_power: 1
+
+selected_features: True
+edge_strategy: spatial
+top_k : 5
+correlation_threshold: 0.9
+low_bandpass_frequency: 0.5
+high_bandpass_frequency: 50

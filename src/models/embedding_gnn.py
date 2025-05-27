@@ -19,10 +19,10 @@ class GNN_Encoder(nn.Module):
         self.encoder = encoder  
         self.gnn = gnn  
 
-    def forward(self, x, edge_index, batch, edge_attr=None):
+    def forward(self, x, edge_index, batch):
         # x: [num_nodes_batch, time_steps] 
         # Apply the encoder to each node independently
         node_embeddings = self.encoder(x)  # shape: [num_nodes, embedding_dim]
 
         # Pass embeddings to the GNN
-        return self.gnn(node_embeddings, edge_index, batch, edge_attr)
+        return self.gnn(node_embeddings, edge_index, batch)

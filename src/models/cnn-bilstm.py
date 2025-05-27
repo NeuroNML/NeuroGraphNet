@@ -6,50 +6,60 @@ import torch.nn.functional as F
 class EEGCNN(nn.Module):
     def __init__(self, in_channels=1, dropout=0.25):
         super().__init__()
-        self.conv1 = nn.Conv1d(in_channels, 32, kernel_size=5, padding=2)
-        self.conv2 = nn.Conv1d(32, 64, kernel_size=3, padding=1)
+
+        # Convolutional layers
+        self.conv1 = nn.Conv1d(1, 32, kernel_size=7, padding=3)
+        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=2)
+        self.conv3 = nn.Conv1d(64, 128, kernel_size=3, padding=1)
+    
+
+        self.pool= nn.MaxPool1d(kernel_size=2) 
         self.relu = nn.ReLU()
-        self.pool = nn.MaxPool1d(kernel_size=2)
-        self.global_pool = nn.AdaptiveAvgPool1d(1)  # Output shape: [B, 64, 1]
-        self.flatten = nn.Flatten()
-        self.dense = nn.Linear(64, 32)
-        self.bn = nn.BatchNorm1d(32)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        # x: [B, 1, T]
-        x = self.relu(self.conv1(x))       # [B, 32, T]
-        x = self.pool(x)                   # [B, 32, T/2]
-        x = self.relu(self.conv2(x))       # [B, 64, T/2]
-        x = self.global_pool(x)            # [B, 64, 1]
-        x = self.flatten(x)                # [B, 64]
-        x = self.relu(self.dense(x))       # [B, 32]
-        x = self.bn(x)
-        x = self.dropout(x)
+        # x: [B, 1, 3000]
+        # Describe: [1,3000]
+        x = self.relu(self.conv1(x))       # [32, 3000]
+        x = self.pool(x)                   # [32, 1500]
+        x = self.relu(self.conv2(x))       # [64, 1500]
+        x = self.pool(x)                   # [64, 750]
+        x = self.relu(self.conv3(x))       # [128, 750]
+        x = self.pool(x)                   # [128, 375]
+
+    
+      
         return x
 
 
 # Bi-LSTM 
 class EEGBiLSTM(nn.Module):
-    def __init__(self, input_size=1, hidden_dims=[64, 32], dropout=0.25):
+    def __init__(self, input_size=128, hidden_dim=64, out_dim = 64, dropout=0.25):
         super().__init__()
-        self.lstm1 = nn.LSTM(input_size=input_size, hidden_size=hidden_dims[0],
-                             batch_first=True, bidirectional=True)
-        self.lstm2 = nn.LSTM(input_size=2*hidden_dims[0], hidden_size=hidden_dims[1],
-                             batch_first=True, bidirectional=True)
-        self.flatten = nn.Flatten()
-        self.dense = nn.Linear(2 * hidden_dims[1], 10)
-        self.relu = nn.ReLU()
-        self.bn = nn.BatchNorm1d(10)
+
+        self.lstm =  nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_dim,
+            batch_first=True,
+            bidirectional=True,
+        )
+        
+        self.project = nn.Sequential(
+            nn.Linear(2 * hidden_dim, out_dim),  # e.g., 128 → 64
+            nn.ReLU()
+        )
+        
+
 
     def forward(self, x):
-        # x: [B, T] → reshape to [B, T, 1]
-        x = x.unsqueeze(-1)
-        x, _ = self.lstm1(x)               # [B, T, 2*64]
-        x, _ = self.lstm2(x)               # [B, T, 2*32]
-        x = x[:, -1, :]                    # Take last timestep → [B, 64]
-        x = self.relu(self.dense(x))       # [B, 10]
-        x = self.bn(x)
+        
+
+        
+
+
+        x, _ = self.lstm(x) # [B, T, 2H] -> Each 'time step' gets two hidden vectors
+        x = x[:, -1, :]    # Single vector per node -> summary representation
+        x = self.project(x) # Reduce by half and apply Relu -> [B, H]
         return x
 
 
@@ -57,18 +67,14 @@ class EEGBiLSTM(nn.Module):
 class CNN_BiLSTM_Encoder(nn.Module):
     def __init__(self, time_steps=3000):
         super().__init__()
-        self.cnn_path = EEGCNN(in_channels=1, time_steps=time_steps)
-        self.lstm_path = EEGBiLSTM(input_size=1)
-        self.fusion = nn.Sequential(
-            nn.Linear(32 + 10, 16),
-            nn.ReLU(),
-            nn.Linear(16, 1)  # Binary classification
-        )
+        self.cnn_path = EEGCNN()
+        self.lstm_path = EEGBiLSTM()
+      
 
     def forward(self, x):
         # x: [B, T]
-        x_cnn = self.cnn_path(x.unsqueeze(1))  # [B, 32]
-        x_lstm = self.lstm_path(x)             # [B, 10]
-        x_fused = torch.cat([x_cnn, x_lstm], dim=1)  # [B, 42]
-        out = self.fusion(x_fused)             # [B, 1]
-        return out
+        x = x.unsqueeze(1)  # [B, 1, 3000
+        lstm_input = self.cnn_path(x).permute(0,2,1)  # Permute output -> [B, 375, 128]
+        embedding = self.lstm_path(lstm_input)            
+       
+        return embedding
