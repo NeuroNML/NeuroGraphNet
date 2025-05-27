@@ -1,0 +1,7 @@
+
+/data/graph_dataset_train/processed/*
+slurm-*
+data/*
+logs/*
+wandb/*
+*.pyc
