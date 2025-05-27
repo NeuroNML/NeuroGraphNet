@@ -17,6 +17,7 @@ epochs: 200
 seed: 42
 oversampling_power: 1
 
+selected_features: True
 edge_strategy: correlation
 top_k : 5
 correlation_threshold: 0.9
