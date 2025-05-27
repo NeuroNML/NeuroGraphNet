@@ -17,7 +17,7 @@ import wandb
 from omegaconf import OmegaConf
 
 
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedGroupKFold
 from sklearn.metrics import f1_score
 
 import torch
@@ -82,7 +82,6 @@ def main():
     clips_tr = clips_tr[~clips_tr.label.isna()]  # Filter NaN values out of clips_tr
     extracted_features = np.load(extracted_features_dir / "X_train.npy")
     # Normalize features
-   
 
     # -------------- Dataset definition -------------- #
     train_dataset = GraphEEGDataset(
@@ -112,14 +111,12 @@ def main():
     # Check the length of the dataset
     log(f"Length of train_dataset: {len(train_dataset)}")
 
-    # --------------- Split dataset intro train/val/test --------------- #
-    train_ids, val_ids = train_test_split(
-        np.arange(len(train_dataset)),
-        test_size=0.2,
-        random_state=config.seed,
-        stratify=clips_tr.label,  # Stratified split based on labels -> to ensure same distribution in train and val sets
-        shuffle=True,
-    )
+    # --------------- Split dataset intro train/val --------------- #
+    cv = StratifiedGroupKFold(n_splits=2, shuffle=True, random_state=42)
+    groups = clips_tr.reset_index().patient.values
+    y = clips_tr["label"].values
+    X = np.zeros(len(y))  # Dummy X (not used); just placeholder for the Kfold
+    train_ids, val_ids = next(cv.split(X, y, groups=groups))  # Just select one split
 
     train_subset = Subset(train_dataset, train_ids)
     val_subset = Subset(train_dataset, val_ids)

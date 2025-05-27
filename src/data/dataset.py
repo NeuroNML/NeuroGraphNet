@@ -308,9 +308,7 @@ class GraphEEGDataset(Dataset):
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         return edge_index
 
-    def _create_correlation_edges(
-        self, signal_data: pd.DataFrame
-    ) -> torch.Tensor:
+    def _create_correlation_edges(self, signal_data: pd.DataFrame) -> torch.Tensor:
         """
         Creates edges based on correlation between channel signals.
 
