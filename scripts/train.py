@@ -82,6 +82,7 @@ def main():
     clips_tr = clips_tr[~clips_tr.label.isna()]  # Filter NaN values out of clips_tr
     extracted_features = np.load(extracted_features_dir / "X_train.npy")
     # Normalize features
+   
 
     # -------------- Dataset definition -------------- #
     train_dataset = GraphEEGDataset(
@@ -89,7 +90,7 @@ def main():
         clips=clips_tr,
         signal_folder=train_dir,
         extracted_features=extracted_features,
-        selected_features_train=True,
+        selected_features_train=config.selected_features,
         edge_strategy=config.edge_strategy,
         spatial_distance_file=(
             spatial_distance_file if config.edge_strategy == "spatial" else None
