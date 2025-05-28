@@ -113,6 +113,10 @@ class GraphEEGDataset(Dataset):
 
         super().__init__(root, transform=None, pre_transform=None, pre_filter=None)
 
+        # Ensure the processed_dir exists
+        if not os.path.exists(self.processed_dir):
+            os.makedirs(self.processed_dir)
+
         if self.force_reprocess is True:
 
             # Delete all previous .pt files
