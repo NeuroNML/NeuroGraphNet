@@ -15,22 +15,34 @@ def build_model(config):
     Returns:
         torch.nn.Module: The constructed model.
     """
-    # Extract model type and parameters from the config
     model_name = config.model.name
     model_type = config.model.type
     model_params = config.model.params
 
-    # Import model class
-    module = importlib.import_module(
-        f"src.models.{model_type}"
-    )  # loads file src/models/{model_type}.py
-    model_class = getattr(
-        module, model_name
-    )  # Extract the class (model_type) from the module
+    # Encoder + gnn models
+    if model_type == "encoder_gnn":
+        # Load encoder
+        encoder = config.model.encoder
+        encoder_module = importlib.import_module(f"src.models.{encoder.type}")
+        encoder_class = getattr(encoder_module, encoder.name)
+        encoder = encoder_class(**encoder.params)
 
-    return model_class(
-        **model_params
-    )  # Create an instance of the model with the specified parameters
+        # Load gnn
+        gnn = config.model.gnn
+        gnn_module = importlib.import_module(f"src.models.{gnn.type}")
+        gnn_class = getattr(gnn_module, gnn.name)
+        gnn = gnn_class(**gnn.params)
+
+        # Now load the full encoder+gnn model
+        module = importlib.import_module(f"src.models.{model_type}")
+        model_class = getattr(module, model_name)
+        return model_class(encoder=encoder, gnn=gnn)
+
+    else:
+        # Simple model
+        module = importlib.import_module(f"src.models.{model_type}")
+        model_class = getattr(module, model_name)
+        return model_class(**model_params)
 
 
 def pooling(x, batch, pooling_type):

@@ -10,12 +10,31 @@ def generate_run_name(config):
     """Generates a run name from the configuration file."""
     name = []
 
-    #
-    name.append(f"{config.model.type}")
-    model_params = config.model.params
-    # Add model parameters
-    for key, value in model_params.items():
-        name.append(f"{key}_{value}")
+    model_type = config.model.type
+    name.append(f"{model_type}")
+    if model_type == "encoder_gnn":
+        encoder = config.model.encoder
+        gnn = config.model.gnn
+
+        # Add encoder
+        name.append(f"{encoder.type}")
+        # Add model parameters
+        for key, value in encoder.params.items():
+            name.append(f"{key}_{value}")
+
+        # Add GNN
+        name.append(f"{gnn.type}")
+        # Add model parameters
+        for key, value in gnn.params.items():
+            name.append(f"{key}_{value}")
+
+    else:
+
+        # Simple model
+        model_params = config.model.params
+        # Add model parameters
+        for key, value in model_params.items():
+            name.append(f"{key}_{value}")
 
     # Add all other parameters not related to model
     for key, value in config.items():
