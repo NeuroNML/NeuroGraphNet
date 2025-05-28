@@ -116,6 +116,7 @@ class GraphEEGDataset(Dataset):
         if self.force_reprocess is True:
             if self.selected_features_train is True:
                 self.process_features()
+
             elif self.selected_features_train is False:
                 self.process_sessions()
 
