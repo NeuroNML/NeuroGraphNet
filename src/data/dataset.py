@@ -113,8 +113,18 @@ class GraphEEGDataset(Dataset):
 
         super().__init__(root, transform=None, pre_transform=None, pre_filter=None)
 
+        # Ensure the processed_dir exists
+        if not os.path.exists(self.processed_dir):
+            os.makedirs(self.processed_dir)
+
         if self.force_reprocess is True:
-            if self.selected_features_train is True:
+
+            # Delete all previous .pt files
+            for fname in os.listdir(self.processed_dir):
+                if fname.startswith("data_") and fname.endswith(".pt"):
+                    os.remove(os.path.join(self.processed_dir, fname))
+
+            if self.selected_features_train == True:
                 self.process_features()
 
             elif self.selected_features_train is False:
@@ -361,7 +371,7 @@ class GraphEEGDataset(Dataset):
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         return edge_index
 
-    def len(self) -> int:
+    def __len__(self) -> int:
         """
         Returns the number of examples in the dataset (number of graphs saved)
         """

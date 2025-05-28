@@ -4,7 +4,11 @@ model:
   encoder:
     type: cnn_bilstm
     name: CNN_BiLSTM_Encoder
-    params: {}
+    params:
+      cnn_dropout: 0.25
+      lstm_hidden_dim: 64
+      lstm_out_dim: 64
+      lstm_dropout: 0.25
   gnn:
     type: mpnn
     name: EEGMPNN

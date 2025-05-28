@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 # CNN
 class EEGCNN(nn.Module):
-    def __init__(self, in_channels=1, dropout=0.25):
+    def __init__(self, dropout=0.25):
         super().__init__()
 
         # Convolutional layers
@@ -22,17 +22,22 @@ class EEGCNN(nn.Module):
         # Describe: [1,3000]
         x = self.relu(self.conv1(x))  # [32, 3000]
         x = self.pool(x)  # [32, 1500]
+        x = self.dropout(x)
+
         x = self.relu(self.conv2(x))  # [64, 1500]
         x = self.pool(x)  # [64, 750]
+        x = self.dropout(x)
+
         x = self.relu(self.conv3(x))  # [128, 750]
         x = self.pool(x)  # [128, 375]
+        x = self.dropout(x)
 
         return x
 
 
 # Bi-LSTM
 class EEGBiLSTM(nn.Module):
-    def __init__(self, input_size=128, hidden_dim=64, out_dim=64, dropout=0.25):
+    def __init__(self, hidden_dim=64, out_dim=64, dropout=0.25, input_size=128): # Inpot size fixed to ouput of CNN
         super().__init__()
 
         self.lstm = nn.LSTM(
@@ -40,26 +45,40 @@ class EEGBiLSTM(nn.Module):
             hidden_size=hidden_dim,
             batch_first=True,
             bidirectional=True,
+            dropout=dropout
         )
 
         self.project = nn.Sequential(
             nn.Linear(2 * hidden_dim, out_dim), nn.ReLU()  # e.g., 128 → 64
         )
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
 
         x, _ = self.lstm(x)  # [B, T, 2H] -> Each 'time step' gets two hidden vectors
         x = x[:, -1, :]  # Single vector per node -> summary representation
         x = self.project(x)  # Reduce by half and apply Relu -> [B, H]
+        x = self.dropout(x)
         return x
 
 
 # Combined model
 class CNN_BiLSTM_Encoder(nn.Module):
-    def __init__(self):
+    def __init__(
+        self,
+        cnn_dropout=0.25,
+        lstm_hidden_dim=64,
+        lstm_out_dim=64,
+        lstm_dropout=0.25,
+    ):
         super().__init__()
-        self.cnn_path = EEGCNN()
-        self.lstm_path = EEGBiLSTM()
+        self.cnn_path = EEGCNN(dropout=cnn_dropout)
+        self.lstm_path = EEGBiLSTM(
+            hidden_dim=lstm_hidden_dim,
+            out_dim=lstm_out_dim,
+            dropout=lstm_dropout,
+        )
+
 
     def forward(self, x):
         # x: [B, T]

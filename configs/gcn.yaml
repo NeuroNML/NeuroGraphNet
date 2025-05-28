@@ -18,7 +18,7 @@ oversampling_power: 1
 
 selected_features: False
 edge_strategy: spatial
-top_k : 5
-correlation_threshold: 0.9
+top_k :  False
+correlation_threshold: False
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50
