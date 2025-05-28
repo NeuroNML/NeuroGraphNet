@@ -126,8 +126,8 @@ class GraphEEGDataset(Dataset):
 
             if self.selected_features_train == True:
                 self.process_features()
-            elif self.selected_features_train == False:
-                print("Sessions", flush=True)
+
+            elif self.selected_features_train is False:
                 self.process_sessions()
 
     def _load_spatial_distances(self) -> Dict:
