@@ -114,9 +114,16 @@ class GraphEEGDataset(Dataset):
         super().__init__(root, transform=None, pre_transform=None, pre_filter=None)
 
         if self.force_reprocess is True:
-            if self.selected_features_train is True:
+
+            # Delete all previous .pt files
+            for fname in os.listdir(self.processed_dir):
+                if fname.startswith("data_") and fname.endswith(".pt"):
+                    os.remove(os.path.join(self.processed_dir, fname))
+
+            if self.selected_features_train == True:
                 self.process_features()
-            elif self.selected_features_train is False:
+            elif self.selected_features_train == False:
+                print("Sessions", flush=True)
                 self.process_sessions()
 
     def _load_spatial_distances(self) -> Dict:
@@ -220,7 +227,7 @@ class GraphEEGDataset(Dataset):
 
                 # Create label tensor
                 y = torch.tensor(
-                    [self.clips["label"].values[idx]], dtype=torch.float
+                    [row["label"]], dtype=torch.float
                 )  # BCELoss expects float labels
 
                 # Create Data object
@@ -360,7 +367,7 @@ class GraphEEGDataset(Dataset):
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         return edge_index
 
-    def len(self) -> int:
+    def __len__(self) -> int:
         """
         Returns the number of examples in the dataset (number of graphs saved)
         """

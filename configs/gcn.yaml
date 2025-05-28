@@ -7,7 +7,7 @@ model:
     num_conv_layers: 3
     pooling_type: mean
     dropout_prob: 0.5
-    in_channels: 12
+    in_channels: 3000
 
 batch_size: 32
 learning_rate: 0.001
@@ -16,9 +16,9 @@ epochs: 200
 seed: 42
 oversampling_power: 1
 
-selected_features: True
+selected_features: False
 edge_strategy: spatial
-top_k : 5
-correlation_threshold: 0.9
+top_k :  False
+correlation_threshold: False
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50
