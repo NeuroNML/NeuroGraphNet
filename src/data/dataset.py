@@ -117,7 +117,7 @@ class GraphEEGDataset(Dataset):
         if not os.path.exists(self.processed_dir):
             os.makedirs(self.processed_dir)
 
-        if self.force_reprocess is True:
+        if self.force_reprocess == True:
 
             # Delete all previous .pt files
             for fname in os.listdir(self.processed_dir):
