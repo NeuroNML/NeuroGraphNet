@@ -17,7 +17,7 @@ def build_model(config):
     """
     model_name = config.model.name
     model_type = config.model.type
-    model_params = config.model.params
+    
 
     # Encoder + gnn models
     if model_type == "encoder_gnn":
@@ -40,6 +40,7 @@ def build_model(config):
 
     else:
         # Simple model
+        model_params = config.model.params
         module = importlib.import_module(f"src.models.{model_type}")
         model_class = getattr(module, model_name)
         return model_class(**model_params)
