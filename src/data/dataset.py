@@ -29,7 +29,7 @@ class GraphEEGDataset(Dataset):
         spatial_distance_file: Optional[str] = None,
         correlation_threshold: float = 0.7,
         top_k: int = None,
-        force_reprocess: bool = False,
+        force_reprocess: bool = True,
         bandpass_frequencies: Tuple[float, float] = (0.5, 50),
         segment_length: int = 12 * 250,  # 12 seconds * 250 Hz -> 3000 samples
         apply_filtering: bool = True,
@@ -128,6 +128,7 @@ class GraphEEGDataset(Dataset):
                 self.process_features()
 
             elif self.selected_features_train == False:
+                print("Processing sessions")
                 self.process_sessions()
 
     def _load_spatial_distances(self) -> Dict:

@@ -112,7 +112,7 @@ def main():
     log(f"Length of train_dataset: {len(train_dataset)}")
 
     # --------------- Split dataset intro train/val --------------- #
-    cv = StratifiedGroupKFold(n_splits=2, shuffle=True, random_state=42)
+    cv = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
     groups = clips_tr.reset_index().patient.values
     y = clips_tr["label"].values
     X = np.zeros(len(y))  # Dummy X (not used); just placeholder for the Kfold

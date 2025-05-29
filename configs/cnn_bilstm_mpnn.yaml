@@ -1,5 +1,5 @@
 model:
-  type: cnn_bilstm_mpnn
+  type: encoder_gnn
   name: GNN_Encoder
   encoder:
     type: cnn_bilstm
