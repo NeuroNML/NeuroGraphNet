@@ -150,9 +150,9 @@ def process_session(session_df, signal_path, bp_filter, notch_filter, f_s=250):
     features_list = []
 
     # Load signal and extract the window
-    session_signal = pd.read_parquet(signal_path)
+    session_signal = pd.read_parquet(signal_path)  # (time, channels)
 
-    # Filter
+    # Filter - Input: (time, channels)
     session_signal = time_filtering(
         session_signal,
         bp_filter=bp_filter,
