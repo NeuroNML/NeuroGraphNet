@@ -504,7 +504,7 @@ def ensure_eeg_multiindex(df: pd.DataFrame, id_col_name: Optional[str] = 'id') -
     df_out = df.copy()
     desired_names = [ClipsDF.patient, ClipsDF.session, ClipsDF.clip_idx, ClipsDF.segment]
 
-    if isinstance(df_out.index, pd.MultiIndex) and list(df_out.index.names) == desired_names:
+    if isinstance(df_out.index, pd.MultiIndex):
         return df_out
 
     id_series: Optional[pd.Series] = None
