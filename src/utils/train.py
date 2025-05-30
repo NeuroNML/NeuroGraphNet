@@ -121,10 +121,8 @@ def train_model(
             if loaded_best_score is not None: best_score = loaded_best_score
             
             print(f"   Checkpoint loaded. Resuming from epoch {start_epoch + 1}. Best '{monitor}' score: {best_score:.4f}")
-            if start_epoch +1 >= patience: # check if the result is still valid
-                print(f"   ⚠️ Warning: Training already completed up to epoch {start_epoch + 1}.")
-                print("   Training already completed according to checkpoint.")
-                return dict(train_history), dict(val_history)
+            print(f"   ⚠️ Warning: Training already completed up to epoch {start_epoch + 1}.")
+            return dict(train_history), dict(val_history)
         except Exception as e:
             print(f"   ⚠️ Could not load checkpoint: {e}. Starting training from scratch.")
             save_path.unlink(missing_ok=True) 
