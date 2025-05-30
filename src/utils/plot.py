@@ -8,7 +8,7 @@ def plot_eeg_clip(signal_data, title_prefix, sampling_rate, channel_names,
        of their respective signal traces.
     """
 
-    if not isinstance(signal_data, np.ndarray) or signal_data.ndim != 2:
+    if signal_data.ndim != 2:
         error_msg = f"Warning: Invalid or empty signal_data provided for '{title_prefix}'. Shape: {getattr(signal_data, 'shape', type(signal_data))}."
         if ax is not None:
             ax.text(0.5, 0.5, error_msg, ha='center', va='center', wrap=True, color='red')
@@ -113,6 +113,17 @@ def plot_eeg_clip(signal_data, title_prefix, sampling_rate, channel_names,
         plt.tight_layout(pad=1.0)
         plt.show()
 
+def plot_signals(signal, title, channels_to_plot=5):
+    plt.figure(figsize=(12, 5))
+    for i in range(min(channels_to_plot, signal.shape[0])):
+        plt.plot(signal[i, :], label=f"Ch {i}")
+    plt.title(title)
+    plt.xlabel("Time")
+    plt.ylabel("Amplitude")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 def plot_training_loss(train_losses, val_losses=None, loss_name="Loss"):
     """Plots the training and optional validation loss over epochs."""
