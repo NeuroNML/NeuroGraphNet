@@ -50,32 +50,49 @@ def _load(
 ) -> Dict[str, Any]:
     """Loads model state_dict and optimizer state. Returns the full checkpoint dictionary."""
     print(f"   - Loading checkpoint from: {path}")
-    checkpoint = torch.load(path, map_location=device, weights_only=False) 
-    state_dict = checkpoint['model_state_dict']
+    loaded_data = torch.load(path, map_location=device, weights_only=False) 
+    
+    state_dict_to_load = None
+    full_checkpoint_data = {} # Initialize for return
 
+    if isinstance(loaded_data, dict) and 'model_state_dict' in loaded_data:
+        print("   - Detected full checkpoint dictionary.")
+        state_dict_to_load = loaded_data['model_state_dict']
+        full_checkpoint_data = loaded_data # Return the original full checkpoint
+        if optimizer and loaded_data.get('optimizer_state_dict'):
+            try:
+                optimizer.load_state_dict(loaded_data['optimizer_state_dict'])
+                print("   - Optimizer state loaded from checkpoint.")
+            except Exception as e:
+                print(f"   - Warning: Could not load optimizer state from checkpoint: {e}")
+    elif isinstance(loaded_data, OrderedDict): # Likely a raw state_dict
+        print("   - Warning: Loaded a raw state_dict. Optimizer state and training history not in this file.")
+        state_dict_to_load = loaded_data
+        # Reconstruct a minimal checkpoint structure for consistent return type
+        full_checkpoint_data = {'model_state_dict': state_dict_to_load, 'train_history': {}, 'val_history': {}}
+    else:
+        raise TypeError(f"Checkpoint file at {path} is not a recognized format (expected dict or OrderedDict).")
+
+    if state_dict_to_load is None:
+        raise ValueError(f"Could not extract model_state_dict from checkpoint at {path}.")
+
+    # Handle 'module.' prefix from DataParallel/DDP if necessary
     wrapped = isinstance(model, (nn.DataParallel, nn.parallel.DistributedDataParallel))
-    has_module_prefix = any(k.startswith("module.") for k in state_dict.keys())
+    has_module_prefix = any(k.startswith("module.") for k in state_dict_to_load.keys())
 
     if wrapped and not has_module_prefix:
-        model.module.load_state_dict(state_dict)
+        model.module.load_state_dict(state_dict_to_load)
     elif not wrapped and has_module_prefix:
         new_state_dict = OrderedDict()
-        for k, v in state_dict.items():
+        for k, v in state_dict_to_load.items():
             name = k.replace("module.", "", 1)
             new_state_dict[name] = v
         model.load_state_dict(new_state_dict)
     else:
-        model.load_state_dict(state_dict)
-    
-    if optimizer and checkpoint.get('optimizer_state_dict'):
-        try:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            print("   - Optimizer state loaded.")
-        except Exception as e:
-            print(f"   - Warning: Could not load optimizer state: {e}")
+        model.load_state_dict(state_dict_to_load)
             
-    print("   - Model state loaded.")
-    return checkpoint
+    print("   - Model state successfully loaded.")
+    return full_checkpoint_data # Return the loaded (or reconstructed) checkpoint data
 
 
 def train_model(
