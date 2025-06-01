@@ -109,11 +109,13 @@ def train_model(
     num_epochs: int = 100,
     grad_clip: float = 1.0,
     overwrite: bool = False,
-    use_gnn: bool = True, # Added: True if GNN model, False for LSTM/CNN using PyG Batch
+    use_gnn: bool = True, 
 ) -> Tuple[Dict[str, List[float]], Dict[str, List[float]]]:
     """
     Generic training loop.
-    If use_gnn=False, it reshapes PyG Batch data for standard sequence models like LSTMs.
+    If use_gnn=False, it assumes data comes from a standard DataLoader (e.g., with TensorDataset)
+    and batch_data is a tuple (input_features, labels).
+    If use_gnn=True, it expects PyG Batch objects.
     """
     start_epoch = 0
     train_history = defaultdict(list) 
@@ -157,44 +159,32 @@ def train_model(
         epoch_train_loss = 0.0
         all_train_preds, all_train_targets = [], []
 
-        for batch_data in train_loader:
-            batch_data = batch_data.to(device)
-            
-            y_targets = batch_data.y 
-            if y_targets is None: 
-                 continue 
-            y_targets = y_targets.float().unsqueeze(1)
-
+        for data_batch_item in train_loader:
             optimizer.zero_grad(set_to_none=True)
 
             if use_gnn:
-                # GNN model call: assumes model.forward(x, edge_index, batch_vector)
-                # or model.forward(batch_data_object) if the model handles it internally
-                if not (hasattr(batch_data, 'x') and hasattr(batch_data, 'edge_index')):
+                # Assumes data_batch_item is a PyG Batch object
+                pyg_batch = data_batch_item.to(device)
+                y_targets = pyg_batch.y 
+                if y_targets is None: 
+                     continue 
+                y_targets = y_targets.float().unsqueeze(1)
+
+                if not (hasattr(pyg_batch, 'x') and hasattr(pyg_batch, 'edge_index')):
                      raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
-                logits = model(batch_data.x.float(), 
-                               batch_data.edge_index, 
-                               batch_data.batch if hasattr(batch_data, 'batch') else None)
+                logits = model(pyg_batch.x.float(), 
+                               pyg_batch.edge_index, 
+                               pyg_batch.batch if hasattr(pyg_batch, 'batch') else None)
             else:
-                # Non-GNN model (e.g., LSTM, CNN) using data from PyG Batch
-                # batch_data.x is [total_nodes_in_batch, num_node_features]
-                # For EEG, num_nodes = num_channels, num_node_features = num_timesteps
-                # So, batch_data.x is [batch_size * num_channels, num_timesteps]
-                # We need to reshape to (batch_size, num_channels, num_timesteps) using to_dense_batch
-                # then permute for LSTM to (batch_size, num_timesteps, num_channels)
-                if not hasattr(batch_data, 'x'):
-                    raise ValueError("Batch data missing 'x' attribute for non-GNN mode.")
+                # Non-GNN model: assumes data_batch_item is a tuple (features, labels)
+                input_features, y_targets_from_batch = data_batch_item
+                input_features = input_features.to(device)
+                # Ensure y_targets is correctly shaped and typed for the loss function
+                y_targets = y_targets_from_batch.to(device).float().unsqueeze(1)
                 
-                # x_dense shape: (batch_size, max_nodes_in_a_graph, node_features)
-                # For GraphEEGDataset: (batch_size, num_channels, num_timesteps)
-                x_dense, mask = to_dense_batch(batch_data.x.float(), 
-                                               batch_data.batch if hasattr(batch_data, 'batch') else None, 
-                                               fill_value=0)
-                
-                # Permute for LSTM/CNN: (batch_size, num_timesteps, num_channels)
-                # This assumes your LSTM's input_dim matches num_channels
-                x_permuted = x_dense.permute(0, 2, 1) 
-                logits = model(x_permuted)
+                # input_features are expected to be in the shape (batch_size, seq_len, model_input_dim)
+                # The model (e.g., LSTM) must be defined with input_dim matching the last dim of input_features.
+                logits = model(input_features)
 
             loss = criterion(logits, y_targets)
             loss.backward()
@@ -227,24 +217,25 @@ def train_model(
         epoch_val_loss = 0.0
         all_val_preds, all_val_targets = [], []
         with torch.no_grad():
-            for batch_data in val_loader:
-                batch_data = batch_data.to(device)
-                y_targets = batch_data.y
-                if y_targets is None: continue
-                y_targets = y_targets.float().unsqueeze(1)
-
+            for data_batch_item in val_loader: # Renamed variable
                 if use_gnn:
-                    if not (hasattr(batch_data, 'x') and hasattr(batch_data, 'edge_index')):
+                    # Assumes data_batch_item is a PyG Batch object
+                    pyg_batch = data_batch_item.to(device)
+                    y_targets = pyg_batch.y
+                    if y_targets is None: continue
+                    y_targets = y_targets.float().unsqueeze(1)
+
+                    if not (hasattr(pyg_batch, 'x') and hasattr(pyg_batch, 'edge_index')):
                          raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
-                    logits = model(batch_data.x.float(), 
-                                   batch_data.edge_index, 
-                                   batch_data.batch if hasattr(batch_data, 'batch') else None)
+                    logits = model(pyg_batch.x.float(), 
+                                   pyg_batch.edge_index, 
+                                   pyg_batch.batch if hasattr(pyg_batch, 'batch') else None)
                 else:
-                    x_dense, mask = to_dense_batch(batch_data.x.float(), 
-                                                   batch_data.batch if hasattr(batch_data, 'batch') else None, 
-                                                   fill_value=0)
-                    x_permuted = x_dense.permute(0, 2, 1)
-                    logits = model(x_permuted)
+                    # Non-GNN model: assumes data_batch_item is a tuple (features, labels)
+                    input_features, y_targets_from_batch = data_batch_item
+                    input_features = input_features.to(device)
+                    y_targets = y_targets_from_batch.to(device).float().unsqueeze(1)
+                    logits = model(input_features)
 
                 epoch_val_loss += criterion(logits, y_targets).item()
                 all_val_preds.append(logits.sigmoid().cpu())
