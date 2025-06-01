@@ -35,3 +35,11 @@ def fft_filtering(x: np.ndarray) -> np.ndarray:
     win_len = x.shape[0]
     # Only frequencies b/w 0.5 and 30Hz
     return x[int(0.5 * win_len // 250) : 30 * win_len // 250]
+
+def spectral_entropy(psd, normalize=False):
+    """Placeholder for spectral entropy."""
+    psd_norm = psd / (np.sum(psd) + 1e-12)
+    entropy = -np.sum(psd_norm * np.log2(psd_norm + 1e-12))
+    if normalize:
+        entropy = entropy / np.log2(psd_norm.shape[0] + 1e-12)
+    return entropy
