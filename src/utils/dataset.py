@@ -12,8 +12,8 @@ from scipy import signal
 
 import torch
 from torch_geometric.data import Dataset, Data
+from src.utils.signal import time_filtering, rereference, normalize
 
-# --- ClipsDF schema ---
 class ClipsDF:
     # Index names if using ensure_eeg_multiindex
     patient = 'patient'
@@ -28,15 +28,6 @@ class ClipsDF:
     signals_path = 'signals_path' 
     sampling_rate = 'sampling_rate'
 
-# --------------------------- Custom imports (ensure these paths are correct) ---------------------------#
-try:
-    from src.utils.signal import time_filtering, rereference, normalize
-except ImportError:
-    print("⚠️ Warning: Could not import signal processing functions from src.utils.signal. Using placeholders.")
-    def time_filtering(x, bp_filter_coeffs, notch_filter_coeffs): print("  -> Placeholder: time_filtering called"); return x 
-    def rereference(x): print("  -> Placeholder: rereference called"); return x 
-    def normalize(x): print("  -> Placeholder: normalize called"); return x 
-
 class GraphEEGDataset(Dataset):
     def __init__(
         self,
@@ -44,7 +35,7 @@ class GraphEEGDataset(Dataset):
         clips_df: pd.DataFrame,
         signal_folder: str,
         extracted_features: Optional[np.ndarray] = None,
-        use_extracted_features: bool = False,
+        use_extracted_features: bool = True,
         edge_strategy: str = "spatial",
         spatial_distance_file: Optional[str] = None,
         correlation_threshold: float = 0.7,
@@ -173,13 +164,6 @@ class GraphEEGDataset(Dataset):
         if ClipsDF.label in self.clips_df.columns:
             return self.clips_df[ClipsDF.label]
         return None
-
-    def download(self):
-        print(f"⚙️ download() called. Ensuring raw directory exists: {self.raw_dir}")
-        if not osp.exists(self.raw_dir):
-            os.makedirs(self.raw_dir)
-        print(f"   - Raw data is expected to be in/accessible via: {self.signal_folder}")
-        print(f"   - PyG raw_dir is: {self.raw_dir}. Ensure data is available for process().")
 
     def process(self):
         print(f"⚙️ process() called. Target processed directory: {self.processed_dir}")
