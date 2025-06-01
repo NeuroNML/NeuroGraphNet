@@ -11,3 +11,4 @@ __pycache__
 
 # avoid pushing processed segments cached
 data/graph_dataset_*/
+.vscode/
