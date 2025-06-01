@@ -2,8 +2,8 @@ model:
   type: mpnn
   name: EEGMPNN
   params:
-    hidden_channels: 64
-    out_channels: 64
+    hidden_channels: 32
+    out_channels: 4
     num_mp_layers: 2
     pooling_message: mean
     pooling_type: mean

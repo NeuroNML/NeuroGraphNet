@@ -3,7 +3,7 @@ model:
   name: EEGGCN
   params:
     hidden_channels: 64
-    out_channels: 64
+    out_channels: 1
     num_conv_layers: 3
     pooling_type: mean
     dropout_prob: 0.5
@@ -16,9 +16,9 @@ epochs: 200
 seed: 42
 oversampling_power: 1
 
-selected_features: False
-edge_strategy: spatial
+selected_features:  False
+edge_strategy: correlation
 top_k :  False
-correlation_threshold: False
+correlation_threshold: 0.9
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50
