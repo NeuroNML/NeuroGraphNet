@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-#SBATCH --job-name=feature_extraction
-#SBATCH --output=feature_extraction_%j.log
+#SBATCH --job-name=feature_extraction_v2
+#SBATCH --output=feature_extraction_v2_%j.log
 #SBATCH --partition=gpu
 #SBATCH --account=ee-452
 #SBATCH --nodes=1
@@ -19,4 +19,4 @@ source "$HOME/venvs/neuro/bin/activate"
 cd ~/NeuroGraphNet || exit
 
 # Run feature extraction script
-python3 feature_extraction.py
+python3 feature_extraction_v2.py
