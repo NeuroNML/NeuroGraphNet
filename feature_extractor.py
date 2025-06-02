@@ -76,29 +76,47 @@ def process_session_for_features(
     base_signal_path: Path,
     bp_filter_coeffs: np.ndarray,
     notch_filter_coeffs: Optional[np.ndarray],
-    f_s: int = 250
+    f_s: int = 250,
+    num_channels: int = 19,
+    num_features_per_channel: int = 12
 ) -> Tuple[List[np.ndarray], List[Any]]:
     group_name, session_df = session_group
 
+    # Calculate expected feature size
+    expected_feature_size = num_channels * num_features_per_channel
+    empty_features = np.zeros(expected_feature_size, dtype=float)
+
+    features_list_for_session: List[np.ndarray] = []
+    all_original_indices: List[Any] = []
+
     if 'signals_path' not in session_df.columns or session_df.empty:
-        return [], []
+        # Return empty features for all rows in this session
+        for original_idx, _ in session_df.iterrows():
+            features_list_for_session.append(empty_features.copy())
+            all_original_indices.append(original_idx)
+        return features_list_for_session, all_original_indices
 
     relative_signal_file = session_df['signals_path'].iloc[0]
     full_session_signal_path = base_signal_path / relative_signal_file
 
-    features_list_for_session: List[np.ndarray] = []
-    successful_original_indices: List[Any] = []
-
     if not full_session_signal_path.exists():
-        return features_list_for_session, successful_original_indices
+        # Return empty features for all rows in this session
+        for original_idx, _ in session_df.iterrows():
+            features_list_for_session.append(empty_features.copy())
+            all_original_indices.append(original_idx)
+        return features_list_for_session, all_original_indices
 
     try:
         session_signal_df = pd.read_parquet(full_session_signal_path)
         session_signal_values = session_signal_df.values
     except Exception as e:
         print(
-            f"Error loading session signal {full_session_signal_path} for group {group_name}: {e}. Skipping session.")
-        return features_list_for_session, successful_original_indices
+            f"Error loading session signal {full_session_signal_path} for group {group_name}: {e}. Using empty features for all segments.")
+        # Return empty features for all rows in this session
+        for original_idx, _ in session_df.iterrows():
+            features_list_for_session.append(empty_features.copy())
+            all_original_indices.append(original_idx)
+        return features_list_for_session, all_original_indices
 
     processed_signal = sosfiltfilt(
         bp_filter_coeffs, session_signal_values, axis=0)
@@ -130,18 +148,24 @@ def process_session_for_features(
                 segment_valid = False
 
             if not segment_valid:
+                features_list_for_session.append(empty_features.copy())
+                all_original_indices.append(original_idx)
                 continue
 
             segment = processed_signal[t0:tf, :]
             if segment.shape[0] < 2:
+                features_list_for_session.append(empty_features.copy())
+                all_original_indices.append(original_idx)
                 continue
 
             features = _extract_segment_features(segment, fs=f_s)
             features_list_for_session.append(features)
-            successful_original_indices.append(original_idx)
+            all_original_indices.append(original_idx)
         except Exception:
+            features_list_for_session.append(empty_features.copy())
+            all_original_indices.append(original_idx)
             continue
-    return features_list_for_session, successful_original_indices
+    return features_list_for_session, all_original_indices
 
 
 if __name__ == "__main__":
@@ -158,22 +182,14 @@ if __name__ == "__main__":
     except FileNotFoundError as e:
         print(f"Error: Parquet file not found. Details: {e}")
         sys.exit(1)
+    print(clips_tr_full.shape)
 
     # --- Ensure MultiIndex ---
-    print("Ensuring MultiIndex for clips_tr_full...")
     clips_tr_full = ensure_eeg_multiindex(clips_tr_full, id_col_name='id')
-    print("clips_tr_full index names after ensure_eeg_multiindex:",
-          clips_tr_full.index.names)
-    print("clips_tr_full columns after ensure_eeg_multiindex:",
-          clips_tr_full.columns)
-
-    print("\nEnsuring MultiIndex for clips_te_full...")
     clips_te_full = ensure_eeg_multiindex(clips_te_full, id_col_name='id')
-    print("clips_te_full index names after ensure_eeg_multiindex:",
-          clips_te_full.index.names)
-    print("clips_te_full columns after ensure_eeg_multiindex:",
-          clips_te_full.columns)
 
+    # Filter out rows with NaN labels in training set
+    print("Filtering training set for valid labels...")
     clips_tr_for_labels = clips_tr_full[~clips_tr_full.label.isna()].copy()
     clips_te = clips_te_full.copy()
 
@@ -225,25 +241,22 @@ if __name__ == "__main__":
             f_s=F_S
         )
         for session_group in tqdm(train_session_groups, desc="Processing Train Sessions")
-        if 'signals_path' in session_group[1].columns and
-           (DATA_ROOT / "train" /
-            session_group[1]["signals_path"].iloc[0]).resolve().exists()
     )
 
     X_train_list = []
-    all_successful_train_indices = []
+    all_train_indices = []
     for session_feat_list, session_indices_list in train_processing_results:
         if session_feat_list:
             X_train_list.extend(session_feat_list)
-            all_successful_train_indices.extend(session_indices_list)
+            all_train_indices.extend(session_indices_list)
 
     X_train = np.array(X_train_list) if X_train_list else np.array([])
 
     y_train = np.array([])
     sample_subject_list_train = np.array([])
-    if all_successful_train_indices:
-        # Use .loc with the collected original indices on the DataFrame that was used for iteration (clips_tr_for_labels)
-        clips_tr_aligned = clips_tr_for_labels.loc[all_successful_train_indices]
+    if all_train_indices:
+        # Use .loc with the collected indices on the DataFrame that was used for iteration (clips_tr_for_labels)
+        clips_tr_aligned = clips_tr_for_labels.loc[all_train_indices]
         y_train = clips_tr_aligned["label"].values
 
         if 'patient' in clips_tr_aligned.index.names:
@@ -252,7 +265,7 @@ if __name__ == "__main__":
         elif 'patient' in clips_tr_aligned.columns:
             sample_subject_list_train = clips_tr_aligned['patient'].to_numpy()
     else:
-        print("Warning: No training features were successfully extracted. y_train and sample_subject_list_train will be empty.")
+        print("Warning: No training features were extracted. y_train and sample_subject_list_train will be empty.")
 
     # --- Test Set Feature Extraction ---
     print("\n⏳ Processing Test Set...")
@@ -277,8 +290,7 @@ if __name__ == "__main__":
         print(f"Error during groupby for test set: {e}")
         print(f"clips_te index: {clips_te.index.names}")
         print(f"clips_te columns: {clips_te.columns}")
-        # Decide if to sys.exit(1) or try to proceed with an empty X_test
-        test_session_groups = []  # Ensure it's empty to avoid further errors
+        sys.exit(1)
 
     test_processing_results = Parallel(n_jobs=-1)(
         delayed(process_session_for_features)(
@@ -289,13 +301,10 @@ if __name__ == "__main__":
             f_s=F_S
         )
         for session_group in tqdm(test_session_groups, desc="Processing Test Sessions")
-        if 'signals_path' in session_group[1].columns and
-           (DATA_ROOT / "test" /
-            session_group[1]["signals_path"].iloc[0]).resolve().exists()
     )
 
     X_test_list = []
-    # For test set, we don't need to align with labels, just collect all features
+    # For test set, we collect all features (including empty ones for failed processing)
     for session_feat_list, _ in test_processing_results:
         if session_feat_list:
             X_test_list.extend(session_feat_list)

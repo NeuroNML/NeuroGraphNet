@@ -3,67 +3,44 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class LSTM(nn.Module):
-    def __init__(self, input_dim=19, hidden_dim=64, num_layers=1, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim, num_layers, dropout, num_classes=1):
         super().__init__()
-        self.lstm = nn.LSTM(
-            input_size=input_dim, # Corrected to input_size for consistency with nn.LSTM docs
-            hidden_size=hidden_dim, # Corrected to hidden_size
-            num_layers=num_layers,
-            batch_first=True,
-            # Dropout in nn.LSTM is applied between layers if num_layers > 1.
-            # For num_layers=1, this dropout argument has no effect.
-            dropout=dropout if num_layers > 1 else 0.0
-        )
-        self.dropout_fc = nn.Dropout(dropout) # Dropout before the final fully connected layer
-        self.fc = nn.Linear(hidden_dim, 1)  # Output for binary classification
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.dropout_val = dropout
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        x shape: [batch_size, seq_len, input_dim]
-        """
-        # out shape: [batch_size, seq_len, hidden_dim]
-        # h_n shape: [num_layers * num_directions, batch_size, hidden_dim]
-        # c_n shape: [num_layers * num_directions, batch_size, hidden_dim]
-        lstm_out, (h_n, c_n) = self.lstm(x)
-        
-        # Use the output of the last time step for classification
-        last_timestep_output = lstm_out[:, -1, :]  # Shape: [batch_size, hidden_dim]
-        
-        # Apply dropout before the final classification layer
-        last_timestep_output_dropped = self.dropout_fc(last_timestep_output)
-        
-        logits = self.fc(last_timestep_output_dropped)  # Shape: [batch_size, 1]
-        return logits
-
-class BiLSTM(nn.Module):
-    def __init__(self, input_dim=19, hidden_dim=64, num_layers=1, dropout=0.2):
-        super().__init__()
         self.lstm = nn.LSTM(
             input_size=input_dim,
             hidden_size=hidden_dim,
             num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-            bidirectional=True
+            batch_first=True, # Ensure this is True if your input is (batch, seq, feature)
+            dropout=self.dropout_val if num_layers > 1 else 0
         )
-        # Input to fc is hidden_dim * 2 due to concatenation of forward and backward passes
+
         self.dropout_fc = nn.Dropout(dropout)
-        self.fc = nn.Linear(hidden_dim * 2, 1) 
+        self.fc = nn.Linear(hidden_dim, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        x shape: [batch_size, seq_len, input_dim]
-        """
-        # lstm_out shape: [batch_size, seq_len, hidden_dim * 2]
-        lstm_out, (h_n, c_n) = self.lstm(x)
+        # x expected shape: (batch_size, seq_len, input_dim) when batch_first=True
         
-        # Use the output of the last time step (concatenation of last fwd and last bwd hidden states)
-        last_timestep_output = lstm_out[:, -1, :]  # Shape: [batch_size, hidden_dim * 2]
+        # lstm_out shape: (batch_size, seq_len, hidden_dim)
+        # hn shape: (num_layers * num_directions, batch_size, hidden_dim)
+        # cn shape: (num_layers * num_directions, batch_size, hidden_dim)
+        lstm_out, (hn, cn) = self.lstm(x)
         
-        last_timestep_output_dropped = self.dropout_fc(last_timestep_output)
+        # To get the features from the last time step of the last layer:
+        # hn[-1] gives the hidden state of the last layer for all time steps.
+        # For a unidirectional LSTM, num_directions is 1.
+        # We want the hidden state from the last layer, which is hn[-1]
+        # This will have shape: [batch_size, hidden_dim]
+        last_hidden_state = hn[-1] 
         
-        logits = self.fc(last_timestep_output_dropped)  # Shape: [batch_size, 1]
-        return logits
+        # Apply dropout before the final classification layer
+        last_hidden_state_dropped = self.dropout_fc(last_hidden_state)
+        
+        output = self.fc(last_hidden_state_dropped)
+        return output
 
 class LSTMAttention(nn.Module):
     def __init__(self, input_dim=19, hidden_dim=64, num_layers=1, dropout=0.2, attention_dim:int = None, bidirectional:bool = True): # type hint
