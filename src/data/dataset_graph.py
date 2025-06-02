@@ -176,6 +176,7 @@ class GraphEEGDataset(Dataset):
 
             # Create edges based on the selected strategy
             edge_index = self._create_edges(segment_signal)
+            print(edge_index)
 
             if edge_index.shape == torch.Size([0]):
                 continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
@@ -191,6 +192,7 @@ class GraphEEGDataset(Dataset):
                 edge_index=edge_index,  # Edges between channels
                 y=y,  # Label
             )
+          
 
             # Save processed data
             torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
@@ -203,7 +205,9 @@ class GraphEEGDataset(Dataset):
         sessions = list(
             self.clips.groupby(["patient", "session"])
         )  # List of tuples: ((patient_id, session_id), session_df)
+      
         idx = 0
+        self.ids_to_eliminate = []
         for (_, _), session_df in sessions:
             # Load signal data (for complete session)
             session_signal = pd.read_parquet(
@@ -214,34 +218,37 @@ class GraphEEGDataset(Dataset):
             session_signal = self._preprocess_signal(session_signal)
 
             #  ------------ Extract corresponding segments from signal ---------------------#
-            for _, row in session_df.iterrows():  # Each row corresponds to a segment
+            
+            for index, row in session_df.iterrows():  # Each row corresponds to a segment
                 start = int(row["start_time"] * self.sampling_rate)
                 end = int(row["end_time"] * self.sampling_rate)
                 segment_signal = session_signal[
                     start:end
                 ].T  # Transpose to get channels as rows: (3000 time points,19 channel)->(19,3000)
-
+            
                 x = torch.tensor(segment_signal, dtype=torch.float)
                 # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
 
                 # Create edges based on the selected strategy
                 edge_index = self._create_edges(segment_signal)
+              
 
                 if edge_index.shape == torch.Size([0]):
+                    self.ids_to_eliminate.append(index)
                     continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
-
+ 
                 # Create label tensor
                 y = torch.tensor(
                     [row["label"]], dtype=torch.float
                 )  # BCELoss expects float labels
-
+                
                 # Create Data object
                 data = Data(
                     x=x,  # Node features: channels x time points
                     edge_index=edge_index,  # Edges between channels
                     y=y,  # Label
                 )
-
+                
                 # Save processed data
                 torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
                 idx += 1
@@ -343,7 +350,7 @@ class GraphEEGDataset(Dataset):
         edge_list = []
         num_channels = len(self.channels)
 
-        if self.top_k is not None:
+        if self.top_k:
 
             adj_dict = defaultdict(list)
 
@@ -368,7 +375,8 @@ class GraphEEGDataset(Dataset):
                     if corr_matrix[i, j] >= self.correlation_threshold:
                         edge_list.append([i, j])
                         edge_list.append([j, i])
-
+                        
+        
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         return edge_index
 

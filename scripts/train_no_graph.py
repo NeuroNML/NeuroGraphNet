@@ -25,7 +25,7 @@ from omegaconf import OmegaConf
 project_root = Path(__file__).resolve().parents[1]
 sys.path.append(str(project_root))
 from src.data.dataset_no_graph import EEGTimeSeriesDataset
-from src.utils.general_funcs import log, generate_run_name
+from src.utils.general_funcs import *
 
 
 def main():
@@ -82,6 +82,8 @@ def main():
     train_dataset = Subset(dataset, train_ids)
     val_dataset = Subset(dataset, val_ids)
 
+    
+
     # 3. Compute sample weights for oversampling
     train_labels = [clips_df.iloc[i]["label"] for i in train_ids]
     class_counts = np.bincount(train_labels)
@@ -130,8 +132,8 @@ def main():
         # Validation
         model.eval()
         val_loss = 0
-        all_preds = []
-        all_labels = []
+        all_preds = list()
+        all_labels = list()
 
         with torch.no_grad():
             for batch in val_loader:
@@ -141,15 +143,26 @@ def main():
                 loss = loss_fn(out, y.reshape(-1, 1))
                 val_loss += loss.item()
                 preds = (torch.sigmoid(out).squeeze() > 0.5).int()
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(y.int().cpu().numpy())
-                probs = torch.sigmoid(out).detach().cpu().numpy()
+                all_preds.extend(preds.cpu().numpy().ravel())
+                all_labels.extend(y.int().cpu().numpy().ravel())
+              
                 
 
         avg_val_loss = val_loss / len(val_loader)
         val_f1 = f1_score(all_labels, all_preds, average="macro")
 
-        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}")
+        all_labels = np.array(all_labels).astype(int)
+        all_preds = np.array(all_preds).astype(int)
+
+        # Accuracy class 1
+        accuracy_1 = accuracy_class_1(all_preds, all_labels)
+        
+        # Monitor progress
+        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}| Accu class 1:{accuracy_1:.4f}")
+        # Print confusion matrix
+        confusion_matrix_plot(all_preds, all_labels)
+
+     
         wandb.log({"epoch": epoch, "train_loss": avg_train_loss, "val_loss": avg_val_loss, "val_f1": val_f1})
 
         if val_f1 > best_val_f1:

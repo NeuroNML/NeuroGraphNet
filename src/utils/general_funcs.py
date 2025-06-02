@@ -1,5 +1,23 @@
 from datetime import datetime
+import numpy as np
 
+
+
+def confusion_matrix_plot(all_preds, all_labels):
+    
+    TP = np.sum((all_preds == 1) & (all_labels == 1))  # True Positives
+    TN = np.sum((all_preds == 0) & (all_labels == 0))  # True Negatives
+    FP = np.sum((all_preds == 1) & (all_labels == 0))  # False Positives
+    FN = np.sum((all_preds == 0) & (all_labels == 1))  # False Negatives
+
+
+    print("\nConfusion Matrix:", flush=True)
+    print("               Predicted", flush=True)
+    print("              0       1", flush=True)
+    print(f"Actual 0    {TN:5d}   {FP:5d}", flush=True)
+    print(f"Actual 1    {FN:5d}   {TP:5d}", flush=True)
+
+   
 
 def log(msg):
     """Log message with timestamp to monitor training."""

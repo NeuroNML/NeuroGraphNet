@@ -18,7 +18,7 @@ from omegaconf import OmegaConf
 
 
 from sklearn.model_selection import train_test_split, GroupKFold
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, recall_score, precision_score
 
 import torch
 import torch.nn as nn
@@ -35,7 +35,7 @@ project_root = (
 sys.path.append(str(project_root))
 from src.data.dataset_graph import GraphEEGDataset
 from src.utils.models_funcs import build_model
-from src.utils.general_funcs import log, generate_run_name
+from src.utils.general_funcs import *
 
 
 # --------------------------------------------- Main function ---------------------------------------------------------#a
@@ -111,43 +111,11 @@ def main():
     # Check the length of the dataset
     log(f"Length of train_dataset: {len(dataset)}")
 
+    # Eliminate ids that did not have electrodes above correlation threshols
+    clips_tr = clips_tr[~clips_tr.index.isin(dataset.ids_to_eliminate)].reset_index(drop=True)
+
     # --------------- Split dataset intro train/val --------------- #
-    """
-    cv = GroupKFold(n_splits=5, shuffle=True, random_state=config.seed)
-    groups = clips_tr.patient.values
-    y = clips_tr["label"].values
-    X = np.zeros(len(y))  # Dummy X (not used); just placeholder for the Kfold
-    train_ids, val_ids = next(cv.split(X, y, groups=groups))  # Just select one split
-
-    train_subset = Subset(train_dataset, train_ids)
-    val_subset = Subset(train_dataset, val_ids)
-
-    # -------Compute sample weights for oversampling ------------------#
-    train_labels = [clips_tr.iloc[i]["label"] for i in train_ids]
-    class_counts = np.bincount(train_labels)
-    # class_weights = 1.0 / (
-    #    class_counts**config.oversampling_power
-    # )  # Higher weights for not frequent classes
-    class_weights = np.where(
-        class_counts > 0, 1.0 / (class_counts**config.oversampling_power), 0.0
-    )
-    sample_weights = [
-        class_weights[label] for label in train_labels
-    ]  # Assign weight to each sample based on its class
-
-    # -------------  Define oversampler ------------------------------#
-    sampler = WeightedRandomSampler(
-        sample_weights, num_samples=len(train_subset), replacement=True
-    )  # Still train on N samples per epoch, but instead of sampling uniformly takes more from minority class
     
-    # -------- Create DataLoader -------- #
-    train_loader = DataLoader(
-        train_subset, batch_size=config.batch_size, sampler=sampler, shuffle=False
-    )  # Since we use specific sampler: shuffle=False
-    val_loader = DataLoader(val_subset, batch_size=config.batch_size, shuffle=True)
-    
-    
-    """
     y = clips_tr.label.values
     train_ids, val_ids = train_test_split(
     np.arange(len(y)),
@@ -155,10 +123,23 @@ def main():
     random_state=config.seed
 )
 
+    '''
+    cv = GroupKFold(n_splits=5, shuffle=True, random_state=config.seed)
+    groups = clips_tr.patient.values
+    y = clips_tr["label"].values
+    X = np.zeros(len(y))  # Dummy X (not used); just placeholder for the Kfold
+    train_ids, val_ids = next(cv.split(X, y, groups=groups))  # Just select one split
+    print('Labels before Kfold', flush=True)
+    print(y,flush=True)
+    '''
+   
+
 
     # 2. From dataset generate train and val datasets
     train_dataset = Subset(dataset, train_ids)
     val_dataset = Subset(dataset, val_ids)
+
+
 
     # 3. Compute sample weights for oversampling
     train_labels = [clips_tr.iloc[i]["label"] for i in train_ids]
@@ -177,7 +158,7 @@ def main():
 
     # -------- Initialize model  -------- #
     model = build_model(config)
-    device = device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
     # -------- Initialize optimizer and loss function -------- #
@@ -209,6 +190,7 @@ def main():
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
+            
         avg_train_loss = total_loss / len(train_loader)  # Average loss per batch
 
         # ------- Validation ------- #
@@ -228,15 +210,43 @@ def main():
 
                 probs = torch.sigmoid(out).squeeze()  # [batch_size, 1] -> [batch_size]
                 preds = (probs > 0.5).int()
-                all_preds.extend(preds.cpu().numpy())
+                all_preds.extend(preds.cpu().numpy().ravel())
                 all_labels.extend(
-                    batch.y.int().cpu().numpy()
+                    batch.y.int().cpu().numpy().ravel()
                 )  # Labels: stored as float in dataset
+
+                log(f"Predictions:{preds.cpu().numpy()}")
+                log(f"Sigmoid outputs: { torch.sigmoid(out).detach().cpu().numpy()}")
+                log(f"Labels:{batch.y}")
+                
+
 
         avg_val_loss = val_loss / len(val_loader)  # Average loss per batch
         val_f1 = f1_score(all_labels, all_preds, average="macro")
+
+        all_labels = np.array(all_labels).astype(int)
+        all_preds = np.array(all_preds).astype(int)
+
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                log(f"{name} grad mean: {param.grad.abs().mean()}")
+
+       
+        
         # Monitor progress
         log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}")
+        
+        # Additional metrics
+         # Confusion matrix
+        confusion_matrix_plot(all_preds, all_labels)
+        # Compute metrics per class (0 and 1)
+        precision = precision_score(all_labels, all_preds, average=None)
+        recall = recall_score(all_labels, all_preds, average=None)
+        f1 = f1_score(all_labels, all_preds, average=None)
+
+        # Print only for class 1
+        log(f"Class 1 — Precision: {precision[1]:.2f}, Recall: {recall[1]:.2f}, F1: {f1[1]:.2f}")
+        
 
         # W&B
         wandb.log(
@@ -268,7 +278,7 @@ def main():
 
     log(f"Best validation F1: {best_val_f1:.4f} at epoch {best_val_f1_epoch}")
 
-    #  -------------- Save best model ------------------#
+ 
     # -------------- Save best model ------------------ #
     model_path = "model.pt"
     torch.save(best_state_dict, model_path)

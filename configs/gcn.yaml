@@ -19,6 +19,6 @@ oversampling_power: 1
 selected_features:  False
 edge_strategy: correlation
 top_k :  False
-correlation_threshold: 0.9
+correlation_threshold: 0.7
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50
