@@ -233,10 +233,17 @@ def process_session_for_features(
     notch_filter_coeffs: Optional[np.ndarray],
     f_s: int = 250,
     num_channels: int = 19,
-    num_features_per_channel: int = 35
+    num_features_per_channel: int = 35,
+    verbose: bool = False
 ) -> Tuple[List[np.ndarray], List[Any]]:
-    print("Job started for session group:", session_group[0])
     group_name, session_df = session_group
+    
+    if verbose:
+        print(f"🔄 Starting job for session group: {group_name}")
+        print(f"   📊 Session has {len(session_df)} segments to process")
+        print(f"   🗂️  Expected features per segment: {num_channels * num_features_per_channel}")
+    else:
+        print(f"Processing session: {group_name} ({len(session_df)} segments)")
 
     # Calculate expected feature size
     expected_feature_size = num_channels * num_features_per_channel
@@ -246,6 +253,8 @@ def process_session_for_features(
     all_original_indices: List[Any] = []
 
     if 'signals_path' not in session_df.columns or session_df.empty:
+        if verbose:
+            print(f"   ⚠️  No signals_path column or empty session for {group_name}")
         # Return empty features for all rows in this session
         for original_idx, _ in session_df.iterrows():
             features_list_for_session.append(empty_features.copy())
@@ -254,8 +263,14 @@ def process_session_for_features(
 
     relative_signal_file = session_df['signals_path'].iloc[0]
     full_session_signal_path = base_signal_path / relative_signal_file
+    
+    if verbose:
+        print(f"   📁 Loading signal file: {relative_signal_file}")
+        print(f"   📍 Full path: {full_session_signal_path}")
 
     if not full_session_signal_path.exists():
+        if verbose:
+            print(f"   ❌ Signal file not found: {full_session_signal_path}")
         # Return empty features for all rows in this session
         for original_idx, _ in session_df.iterrows():
             features_list_for_session.append(empty_features.copy())
@@ -263,8 +278,12 @@ def process_session_for_features(
         return features_list_for_session, all_original_indices
 
     try:
+        if verbose:
+            print(f"   🔄 Reading parquet file...")
         session_signal_df = pd.read_parquet(full_session_signal_path)
         session_signal_values = session_signal_df.values
+        if verbose:
+            print(f"   ✅ Signal loaded: shape {session_signal_values.shape}")
     except Exception as e:
         print(
             f"Error loading session signal {full_session_signal_path} for group {group_name}: {e}. Using empty features for all segments.")
@@ -274,11 +293,19 @@ def process_session_for_features(
             all_original_indices.append(original_idx)
         return features_list_for_session, all_original_indices
 
+    if verbose:
+        print(f"   🔧 Applying filters...")
+        print(f"      Original signal range: [{np.min(session_signal_values):.4f}, {np.max(session_signal_values):.4f}]")
+    
     processed_signal = sosfiltfilt(
         bp_filter_coeffs, session_signal_values, axis=0)
     if notch_filter_coeffs is not None:
         processed_signal = sosfiltfilt(
             notch_filter_coeffs, processed_signal, axis=0)
+
+    if verbose:
+        print(f"      Filtered signal range: [{np.min(processed_signal):.4f}, {np.max(processed_signal):.4f}]")
+        print(f"   🔄 Applying re-referencing and normalization...")
 
     avg_reference = np.mean(processed_signal, axis=1, keepdims=True)
     processed_signal = processed_signal - avg_reference
@@ -286,43 +313,91 @@ def process_session_for_features(
     std_per_channel = np.std(processed_signal, axis=0, keepdims=True)
     processed_signal = (processed_signal - mean_per_channel) / \
         (std_per_channel + 1e-6)
+    
+    if verbose:
+        print(f"      Normalized signal range: [{np.min(processed_signal):.4f}, {np.max(processed_signal):.4f}]")
+        print(f"   🎯 Processing {len(session_df)} segments...")
+
+    segment_count = 0
+    valid_segments = 0
+    failed_segments = 0
 
     for original_idx, row in session_df.iterrows():
-        print(f"Processing segment for original index: {original_idx}")
+        segment_count += 1
+        
+        if verbose and segment_count % 10 == 0:
+            print(f"      Progress: {segment_count}/{len(session_df)} segments processed")
+        elif not verbose:
+            print(f"Processing segment {segment_count}/{len(session_df)} for original index: {original_idx}")
+            
         try:
             t0 = int(row["start_time"] * f_s)
             tf = int(row["end_time"] * f_s)
             max_len = processed_signal.shape[0]
             segment_valid = True
+            
+            if verbose and segment_count <= 3:  # Show details for first few segments
+                print(f"         Segment {segment_count}: t0={t0}, tf={tf}, max_len={max_len}")
 
             if t0 < 0 or t0 >= max_len:
                 segment_valid = False
+                if verbose and segment_count <= 3:
+                    print(f"         Invalid: t0 out of bounds")
             elif tf > max_len:
                 tf = max_len
                 if t0 >= tf:
                     segment_valid = False
+                    if verbose and segment_count <= 3:
+                        print(f"         Invalid: tf adjusted but still invalid")
             elif t0 >= tf:
                 segment_valid = False
+                if verbose and segment_count <= 3:
+                    print(f"         Invalid: t0 >= tf")
 
             if not segment_valid:
                 features_list_for_session.append(empty_features.copy())
                 all_original_indices.append(original_idx)
+                failed_segments += 1
                 continue
 
             segment = processed_signal[t0:tf, :]
             if segment.shape[0] < 2:
                 features_list_for_session.append(empty_features.copy())
                 all_original_indices.append(original_idx)
+                failed_segments += 1
+                if verbose and segment_count <= 3:
+                    print(f"         Invalid: segment too short ({segment.shape[0]} samples)")
                 continue
 
+            if verbose and segment_count <= 3:
+                print(f"         Extracting features from segment shape: {segment.shape}")
+                
             features = _extract_segment_features(segment, fs=f_s)
             features_list_for_session.append(features)
             all_original_indices.append(original_idx)
-        except Exception:
+            valid_segments += 1
+            
+            if verbose and segment_count <= 3:
+                print(f"         Features extracted: {len(features)} values")
+                print(f"         Feature range: [{np.min(features):.4f}, {np.max(features):.4f}]")
+                
+        except Exception as e:
             features_list_for_session.append(empty_features.copy())
             all_original_indices.append(original_idx)
+            failed_segments += 1
+            if verbose:
+                print(f"         ❌ Error processing segment {segment_count}: {e}")
             continue
-    print(f"Job completed for session group: {group_name}")
+    
+    if verbose:
+        print(f"   ✅ Session {group_name} completed:")
+        print(f"      Total segments: {segment_count}")
+        print(f"      Valid segments: {valid_segments}")
+        print(f"      Failed segments: {failed_segments}")
+        print(f"      Success rate: {valid_segments/segment_count*100:.1f}%")
+    else:
+        print(f"Job completed for session group: {group_name} - {valid_segments}/{segment_count} valid segments")
+        
     return features_list_for_session, all_original_indices
 
 
@@ -447,17 +522,35 @@ def main(verbose: bool = False):
             base_signal_path=LOCAL_DATA_ROOT / "train",
             bp_filter_coeffs=bp_filter_coeffs_sos,
             notch_filter_coeffs=notch_filter_coeffs_sos,
-            f_s=F_S
+            f_s=F_S,
+            verbose=verbose
         )
         for session_group in tqdm(train_session_groups, desc="Processing Train Sessions")
     )
 
+    if verbose:
+        print(f"\n🔄 Collecting training results from {len(train_processing_results)} jobs...")
+        
     X_train_list = []
     all_train_indices = []
-    for session_feat_list, session_indices_list in train_processing_results:
+    total_segments_processed = 0
+    total_valid_segments = 0
+    
+    for i, (session_feat_list, session_indices_list) in enumerate(train_processing_results):
+        if verbose and i % 10 == 0:
+            print(f"   Processing job result {i+1}/{len(train_processing_results)}...")
+            
         if session_feat_list:
             X_train_list.extend(session_feat_list)
             all_train_indices.extend(session_indices_list)
+            total_valid_segments += len(session_feat_list)
+        total_segments_processed += len(session_indices_list) if session_indices_list else 0
+
+    if verbose:
+        print(f"   ✅ Training data collection complete:")
+        print(f"      Total segments processed: {total_segments_processed}")
+        print(f"      Valid segments: {total_valid_segments}")
+        print(f"      Success rate: {total_valid_segments/total_segments_processed*100:.1f}%" if total_segments_processed > 0 else "      Success rate: 0%")
 
     X_train = np.array(X_train_list) if X_train_list else np.array([])
 
@@ -475,6 +568,22 @@ def main(verbose: bool = False):
             sample_subject_list_train = clips_tr_aligned['patient'].to_numpy()
     else:
         print("⚠️  Warning: No training features were extracted. y_train and sample_subject_list_train will be empty.")
+        
+    if verbose:
+        print(f"\n📈 Training set feature extraction results:")
+        print(f"   ✅ Features extracted: {X_train.shape if X_train.size > 0 else 'None'}")
+        print(f"   🏷️  Labels extracted: {y_train.shape if y_train.size > 0 else 'None'}")
+        print(f"   👤 Subjects: {len(np.unique(sample_subject_list_train)) if sample_subject_list_train.size > 0 else 'None'}")
+        if X_train.size > 0:
+            features_per_channel = X_train.shape[1] // 19
+            print(f"   🔬 Actual features per channel: {features_per_channel}")
+            print(f"   📊 Feature statistics:")
+            print(f"      Mean: {np.mean(X_train):.4f}")
+            print(f"      Std: {np.std(X_train):.4f}")
+            print(f"      Min: {np.min(X_train):.4f}")
+            print(f"      Max: {np.max(X_train):.4f}")
+            non_zero_features = np.count_nonzero(X_train, axis=0)
+            print(f"   🎯 Non-zero features: {np.sum(non_zero_features > 0)}/{len(non_zero_features)}")
         
     if verbose:
         print(f"\n📈 Training set feature extraction results:")
@@ -532,17 +641,44 @@ def main(verbose: bool = False):
             base_signal_path=LOCAL_DATA_ROOT / "test",
             bp_filter_coeffs=bp_filter_coeffs_sos,
             notch_filter_coeffs=notch_filter_coeffs_sos,
-            f_s=F_S
+            f_s=F_S,
+            verbose=verbose
         )
         for session_group in tqdm(test_session_groups, desc="Processing Test Sessions")
     )
 
+    if verbose:
+        print(f"\n🔄 Collecting test results from {len(test_processing_results)} jobs...")
+
     X_test_list = []
+    total_test_segments = 0
+    valid_test_segments = 0
+    
     # For test set, we collect all features (including empty ones for failed processing)
-    for session_feat_list, _ in test_processing_results:
+    for i, (session_feat_list, session_indices_list) in enumerate(test_processing_results):
+        if verbose and i % 10 == 0:
+            print(f"   Processing test job result {i+1}/{len(test_processing_results)}...")
+            
         if session_feat_list:
             X_test_list.extend(session_feat_list)
+            valid_test_segments += len(session_feat_list)
+        total_test_segments += len(session_indices_list) if session_indices_list else 0
+        
     X_test = np.array(X_test_list) if X_test_list else np.array([])
+    
+    if verbose:
+        print(f"   ✅ Test data collection complete:")
+        print(f"      Total test segments processed: {total_test_segments}")
+        print(f"      Valid test segments: {valid_test_segments}")
+        print(f"      Test success rate: {valid_test_segments/total_test_segments*100:.1f}%" if total_test_segments > 0 else "      Test success rate: 0%")
+        print(f"   🧪 Test set feature extraction results:")
+        print(f"      Features extracted: {X_test.shape if X_test.size > 0 else 'None'}")
+        if X_test.size > 0:
+            print(f"      Feature statistics:")
+            print(f"         Mean: {np.mean(X_test):.4f}")
+            print(f"         Std: {np.std(X_test):.4f}")
+            print(f"         Min: {np.min(X_test):.4f}")
+            print(f"         Max: {np.max(X_test):.4f}")
 
     # --- Check correct values ---
     print("\n--- Final dataset shapes: ---")
