@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 
-#sbatch --job-name=feature_extraction
-#sbatch --output=feature_extraction_%j.log
-#sbatch --account=ee-452
-#sbatch --nodes=1
-#sbatch --ntasks=1
-#sbatch --mem=16gb
-#sbatch --time=00:30:00
+#SBATCH --job-name=feature_extraction
+#SBATCH --output=feature_extraction_%j.log
+#SBATCH --partition=gpu
+#SBATCH --account=ee-452
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=16gb
+#SBATCH --time=00:30:00
 
 echo "Loading modules…"
 module load gcc python

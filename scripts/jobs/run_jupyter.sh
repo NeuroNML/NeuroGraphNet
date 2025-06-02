@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
-#sbatch --job-name=eeg_jupyter
-#sbatch --output=eeg_jupyter_%j.log
-#sbatch --partition=gpu
-#sbatch --account=ee-452
-#sbatch --gres=gpu:1
-#sbatch --nodes=1
-#sbatch --ntasks=1
-#sbatch --cpus-per-task=20
-#sbatch --mem=32gb
-#sbatch --time=02:00:00
+#SBATCH --job-name=eeg_jupyter
+#SBATCH --output=eeg_jupyter_%j.log
+#SBATCH --partition=gpu
+#SBATCH --account=ee-452
+#SBATCH --gres=gpu:1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=16gb
+#SBATCH --time=03:00:00
 
 echo "Loading modules…"
 module load gcc python
