@@ -7,7 +7,7 @@ import torch.nn.functional as F
 class EEGConvBiLSTM(nn.Module):
 # -------------------------- MODEL -----------------------#
 
-    def __init__(self, in_channels=1):
+    def __init__(self, output_dim_lstm =128, in_channels=1):
         super().__init__()
         # Result CNN: compress the time series while increasing the number of channels.
         self.cnn = nn.Sequential(
@@ -19,7 +19,7 @@ class EEGConvBiLSTM(nn.Module):
             nn.MaxPool1d(2)
         )
         # Output: [batch_size, 64, time_samples/4=fs*3]
-        self.rnn = nn.LSTM(input_size=64, hidden_size=128, batch_first=True)
+        self.rnn = nn.LSTM(input_size=64, hidden_size=output_dim_lstm, batch_first=True)
         # Output: final hidden state -> [1, batch_size, 128]
         #self.fc = nn.Linear(128, 1)
 

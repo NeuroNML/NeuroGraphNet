@@ -16,7 +16,7 @@ import torch.optim as optim
 from torch.utils.data import Subset, WeightedRandomSampler, DataLoader
 
 from sklearn.model_selection import StratifiedGroupKFold, train_test_split
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, precision_score, recall_score
 
 import wandb
 from omegaconf import OmegaConf
@@ -45,15 +45,24 @@ def main():
 
     log("wandb login successful")
 
-    # -------- Load metadata and dataset -------- #
+    # -------- Directories -------- #
     DATA_ROOT = Path("data")
     clips_df = pd.read_parquet(DATA_ROOT / "train/segments.parquet")
+    extracted_features_dir = DATA_ROOT / "extracted_features"
+    embeddings_dir =  DATA_ROOT / "embeddings"
+
+    # ------------- Prepare training data -----------------#
     clips_df = clips_df[~clips_df.label.isna()].reset_index()
+
 
     dataset = EEGTimeSeriesDataset(
         root="data/timeseries_dataset_train",
         clips=clips_df,
         signal_folder="data/train",
+        extracted_features_dir=extracted_features_dir,
+        selected_features_train=config.selected_features,
+        embeddings_dir = embeddings_dir,
+        embeddings_train = config.embeddings,
         segment_length=3000,
         apply_filtering=True,
         apply_rereferencing=False,
@@ -62,7 +71,7 @@ def main():
     )
 
     # -------- Split data -------- #
-    """
+    
     cv = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=config.seed)
     y = clips_df.label.values
     groups = clips_df.patient.values
@@ -75,7 +84,7 @@ def main():
     test_size=0.2,
     stratify = y,
     random_state=config.seed
-)
+)   """
 
 
     # 2. From dataset generate train and val datasets
@@ -83,19 +92,23 @@ def main():
     val_dataset = Subset(dataset, val_ids)
 
     
-
+    
     # 3. Compute sample weights for oversampling
     train_labels = [clips_df.iloc[i]["label"] for i in train_ids]
     class_counts = np.bincount(train_labels)
     class_weights = 1. / class_counts # Higher weights for not frequent classes
     sample_weights = [class_weights[label] for label in train_labels] # Assign weight to each sample based on its class
-
+    
     # 4. Define sampler
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True) # Still train on N samples per epoch, but instead of sampling uniformly takes more from minority class
     
     # Define dataloaders
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, sampler=sampler, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size)
+    '''
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size)
+    '''
    
 
     # -------- Load model -------- #
@@ -106,6 +119,10 @@ def main():
     model = model_class(**model_cfg.params).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+    # Penalize more positive samples
+    #pos_weight = torch.tensor([class_counts[0] / class_counts[1]], dtype=torch.float32).to(device)
+    #log(f'pos_weigth:{pos_weight}')
+    #loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     loss_fn = nn.BCEWithLogitsLoss()
 
     best_val_loss = float("inf")
@@ -121,8 +138,9 @@ def main():
             x, y = batch
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            out = model(x)
-            loss = loss_fn(out, y.reshape(-1, 1))
+            logits, _ = model(x)  
+            loss = loss_fn(logits, y.reshape(-1, 1))
+            #loss = loss_fn(out, y.reshape(-1, 1))
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -139,30 +157,33 @@ def main():
             for batch in val_loader:
                 x, y = batch
                 x, y = x.to(device), y.to(device)
-                out = model(x)
-                loss = loss_fn(out, y.reshape(-1, 1))
+                #out = model(x)
+                #loss = loss_fn(out, y.reshape(-1, 1))
+                logits, _ = model(x)  
+                loss = loss_fn(logits, y.reshape(-1, 1))
                 val_loss += loss.item()
-                preds = (torch.sigmoid(out).squeeze() > 0.5).int()
+                preds = (torch.sigmoid(logits).squeeze() > 0.5).int()
                 all_preds.extend(preds.cpu().numpy().ravel())
                 all_labels.extend(y.int().cpu().numpy().ravel())
               
-                
-
         avg_val_loss = val_loss / len(val_loader)
         val_f1 = f1_score(all_labels, all_preds, average="macro")
 
         all_labels = np.array(all_labels).astype(int)
         all_preds = np.array(all_preds).astype(int)
 
-        # Accuracy class 1
-        accuracy_1 = accuracy_class_1(all_preds, all_labels)
         
         # Monitor progress
-        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}| Accu class 1:{accuracy_1:.4f}")
+        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}| Val F1: {val_f1:.4f}")
         # Print confusion matrix
         confusion_matrix_plot(all_preds, all_labels)
+        # Compute metrics per class (0 and 1)
+        precision = precision_score(all_labels, all_preds, average=None)
+        recall = recall_score(all_labels, all_preds, average=None)
+        f1 = f1_score(all_labels, all_preds, average=None)
+        # Print only for class 1
+        log(f"Class 1 — Precision: {precision[1]:.2f}, Recall: {recall[1]:.2f}, F1: {f1[1]:.2f}")
 
-     
         wandb.log({"epoch": epoch, "train_loss": avg_train_loss, "val_loss": avg_val_loss, "val_f1": val_f1})
 
         if val_f1 > best_val_f1:
@@ -179,6 +200,33 @@ def main():
             if counter >= patience:
                 log("Early stopping triggered.")
                 break
+
+
+    # Save  embeddings
+    '''
+    model.load_state_dict(best_state_dict)
+    model.eval()
+
+    all_embeddings = []
+    all_labels = []
+    
+    # New DataLoader with all samples
+    embedding_loader = DataLoader(dataset, batch_size=1, shuffle=False)
+
+    with torch.no_grad():
+        for batch in embedding_loader:
+            x, y = batch
+            x = x.to(device)
+            _, embeddings = model(x) # [B, 128]
+
+            for i in range(x.size(0)):
+                all_embeddings.append(embeddings[i].cpu().numpy())  # shape: [19, 128]
+                all_labels.append(y[i].item())
+    # Save
+    log(np.array(all_embeddings).shape)
+    np.save(embeddings_dir /"embeddings.npy", np.array(all_embeddings))  # shape: [N, 19, 128]
+    np.save(embeddings_dir /"labels_embeddings.npy", np.array(all_labels))          # shape: [N]
+    '''
 
     log(f"Best validation F1: {best_val_f1:.4f}")
     model_path = "model.pt"

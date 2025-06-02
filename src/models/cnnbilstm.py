@@ -26,4 +26,6 @@ class EEGConvBiLSTM(nn.Module):
         x = x.permute(0, 2, 1)  # Reorder output so features at time steps are in third dimension
         _, (hn, _) = self.rnn(x)    # Just need final hidden message
         out = self.fc(hn.squeeze(0))  # Squeeze: [1, batch_size, 128]  -> [1, batch_size, 128]
+
+        
         return out # No sigmoid to get prob. ->[batch_size, probs.]; already incorporated in loss

@@ -23,7 +23,9 @@ class GraphEEGDataset(Dataset):
         root: str,
         clips: pd.DataFrame,
         signal_folder: str,
-        extracted_features: np.ndarray,
+        embeddings_dir:str,
+        embeddings_train: bool,
+        extracted_features_dir: str,
         selected_features_train: bool,
         edge_strategy: str = "spatial",
         spatial_distance_file: Optional[str] = None,
@@ -56,7 +58,9 @@ class GraphEEGDataset(Dataset):
         self.clips = clips
         self.signal_folder = signal_folder
         self.force_reprocess = force_reprocess
-        self.extracted_features = extracted_features
+        self.embeddings_dir = embeddings_dir
+        self.embeddings_train = embeddings_train
+        self.extracted_features_dir = extracted_features_dir
         self.selected_features_train = selected_features_train
         self.bandpass_frequencies = bandpass_frequencies
         self.edge_strategy = edge_strategy
@@ -93,6 +97,9 @@ class GraphEEGDataset(Dataset):
         ]
 
         self.n_channels = len(self.channels)  # Number of EEG channels
+        
+        # Ids to eliminate
+        self.ids_to_eliminate = []
 
         # Define frequency filters
         self.bp_filter = signal.butter(
@@ -124,10 +131,12 @@ class GraphEEGDataset(Dataset):
                 if fname.startswith("data_") and fname.endswith(".pt"):
                     os.remove(os.path.join(self.processed_dir, fname))
 
-            if self.selected_features_train == True:
+            if selected_features_train == True:
                 self.process_features()
-
-            elif self.selected_features_train == False:
+                
+            elif embeddings_train == True:
+                self.process_embeddings()
+            else:
                 print("Processing sessions")
                 self.process_sessions()
 
@@ -153,14 +162,52 @@ class GraphEEGDataset(Dataset):
             spatial_distances[(ch2, ch1)] = dist
 
         return spatial_distances
+    
+    
+
+    def process_embeddings(self):
+        """
+        Convert precomputed [19, D] embeddings into PyTorch Geometric graph Data objects.
+
+        Args:
+            embeddings (np.ndarray): shape [N, 19, D]
+            labels (np.ndarray): shape [N]
+        """
+        embeddings = np.load(self.embeddings_dir /"embeddings.npy")
+        labels = np.load(self.embeddings_dir /"labels_embeddings.npy")
+        assert len(embeddings) == len(labels), "Mismatch between embeddings and labels"
+    
+        idx = 0
+        for i in range(len(embeddings)):
+            segment = embeddings[i]  # shape: [19, D]
+
+            # Normalize across nodes (per feature)
+            mean = segment.mean(axis=0, keepdims=True)
+            std = segment.std(axis=0, keepdims=True) + 1e-6
+            segment = (segment - mean) / std
+
+            x = torch.tensor(segment, dtype=torch.float32)  # [19, D]
+            edge_index = self._create_edges(segment)
+
+            if edge_index.numel() == 0:
+                self.ids_to_eliminate.append(i)
+                continue
+
+            y = torch.tensor([labels[i]], dtype=torch.float32)
+
+            data = Data(x=x, edge_index=edge_index, y=y)
+            torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
+            idx += 1
+
 
     def process_features(self):
         """
         Processes extracted features from samples into PyTorch Geometric Data objects.
         """
+        extracted_features = np.load(self.extracted_features_dir / "X_train.npy")
         idx = 0
         for index, segment_signal in enumerate(
-            self.extracted_features
+            extracted_features
         ):  # (samples, extracted_features*electrodes)
             segment_signal = segment_signal.reshape(
                 self.n_channels, -1
@@ -176,9 +223,10 @@ class GraphEEGDataset(Dataset):
 
             # Create edges based on the selected strategy
             edge_index = self._create_edges(segment_signal)
-            print(edge_index)
+          
 
             if edge_index.shape == torch.Size([0]):
+                self.ids_to_eliminate.append(index)
                 continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
 
             # Create label tensor
@@ -207,7 +255,7 @@ class GraphEEGDataset(Dataset):
         )  # List of tuples: ((patient_id, session_id), session_df)
       
         idx = 0
-        self.ids_to_eliminate = []
+        
         for (_, _), session_df in sessions:
             # Load signal data (for complete session)
             session_signal = pd.read_parquet(

@@ -27,6 +27,10 @@ class GNN_Encoder(nn.Module):
         node_embeddings = self.encoder(x)  # shape: [B, embedding_dim]
         print("Encoder output:", node_embeddings.shape, node_embeddings.mean().item(), node_embeddings.std().item())
 
+        print("edge_index shape:", edge_index.shape)
+        print("num edges:", edge_index.size(1))
+        print("edge_index[:,:5]:", edge_index[:, :5])
+
         # Pass embeddings to the GNN
         return  self.gnn(node_embeddings, edge_index, batch)
 

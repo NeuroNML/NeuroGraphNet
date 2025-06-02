@@ -8,7 +8,7 @@ model:
     pooling_message: mean
     pooling_type: mean
     dropout_prob: 0.5
-    in_channels: 3000
+    in_channels: 12
 
 batch_size: 32
 learning_rate: 0.001
@@ -17,7 +17,7 @@ epochs: 200
 seed: 42
 oversampling_power: 1
 
-selected_features: False
+selected_features: True
 edge_strategy: correlation
 top_k : False
 correlation_threshold: 0.7

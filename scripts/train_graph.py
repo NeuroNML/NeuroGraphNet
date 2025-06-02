@@ -75,21 +75,22 @@ def main():
     train_dataset_dir = DATA_ROOT / "graph_dataset_train"
     spatial_distance_file = DATA_ROOT / "distances_3d.csv"
     extracted_features_dir = DATA_ROOT / "extracted_features"
+    embeddings_dir =  DATA_ROOT / "embeddings"
 
     # ----------------- Prepare training data -----------------#
 
     clips_tr = pd.read_parquet(train_dir_metadata)
     clips_tr = clips_tr[~clips_tr.label.isna()].reset_index()  # Filter NaN values out of clips_tr
-    extracted_features = np.load(extracted_features_dir / "X_train.npy")
-    # Normalize features
 
     # -------------- Dataset definition -------------- #
     dataset = GraphEEGDataset(
         root=train_dataset_dir,
         clips=clips_tr,
         signal_folder=train_dir,
-        extracted_features=extracted_features,
+        extracted_features_dir=extracted_features_dir,
         selected_features_train=config.selected_features,
+        embeddings_dir = embeddings_dir,
+        embeddings_train = config.embeddings,
         edge_strategy=config.edge_strategy,
         spatial_distance_file=(
             spatial_distance_file if config.edge_strategy == "spatial" else None
@@ -103,8 +104,8 @@ def main():
         ),
         segment_length=3000,
         apply_filtering=True,
-        apply_rereferencing=True,
-        apply_normalization=True,
+        apply_rereferencing=False,
+        apply_normalization=False,
         sampling_rate=250,
     )
 
@@ -158,6 +159,8 @@ def main():
 
     # -------- Initialize model  -------- #
     model = build_model(config)
+    print(model)
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
@@ -188,6 +191,9 @@ def main():
                 out, batch.y.reshape(-1, 1)
             )  # y: [batch_size] ->[batch_size, 1]
             loss.backward()
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    print(f"{name}: grad norm = {param.grad.norm().item():.2e}")
             optimizer.step()
             total_loss += loss.item()
             
@@ -214,6 +220,8 @@ def main():
                 all_labels.extend(
                     batch.y.int().cpu().numpy().ravel()
                 )  # Labels: stored as float in dataset
+                log(f"Val logits stats — min: {out.min().item():.4f}, max: {out.max().item():.4f}, mean: {out.mean().item():.4f}, std: {out.std().item():.4f}")
+
 
                 log(f"Predictions:{preds.cpu().numpy()}")
                 log(f"Sigmoid outputs: { torch.sigmoid(out).detach().cpu().numpy()}")

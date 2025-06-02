@@ -1,0 +1,19 @@
+model:
+  type: gnn
+  name: SimpleGNN
+  params:
+    input_dim: 12
+
+batch_size: 32
+learning_rate: 0.001
+weight_decay: 0
+epochs: 200
+seed: 42
+oversampling_power: 1
+
+selected_features: True
+edge_strategy: correlation
+top_k : False
+correlation_threshold: 0.6
+low_bandpass_frequency: 0.5
+high_bandpass_frequency: 50

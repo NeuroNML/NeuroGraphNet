@@ -16,6 +16,10 @@ class EEGTimeSeriesDataset(Dataset):
         self,
         root,
         clips: pd.DataFrame,
+        embeddings_dir:str,
+        embeddings_train: bool,
+        extracted_features_dir: str,
+        selected_features_train: bool,
         signal_folder: str,
         segment_length: int = 3000,
         apply_rereferencing: bool = True,
@@ -27,6 +31,10 @@ class EEGTimeSeriesDataset(Dataset):
         self.root = root
         self.clips = clips
         self.signal_folder = signal_folder
+        self.embeddings_dir = embeddings_dir
+        self.embeddings_train = embeddings_train
+        self.extracted_features_dir = extracted_features_dir
+        self.selected_features_train = selected_features_train
         self.segment_length = segment_length
         self.apply_filtering = apply_filtering
         self.apply_rereferencing = apply_rereferencing
@@ -46,7 +54,14 @@ class EEGTimeSeriesDataset(Dataset):
         self.notch_filter = signal.tf2sos(*notch_filter)
 
         self.samples = []
-        self._process_sessions()
+        if selected_features_train == True:
+                self._process_features()
+                
+        elif embeddings_train == True:
+                self._process_embeddings()
+        else:
+                print("Processing sessions")
+                self._process_sessions()
 
     def _filter_signal(self, signal):
         return time_filtering(signal, bp_filter=self.bp_filter, notch_filter=self.notch_filter)
@@ -68,6 +83,52 @@ class EEGTimeSeriesDataset(Dataset):
         if self.apply_normalization:
             signal = self._normalize(signal)
         return signal
+    
+    def _process_embeddings(self):
+        embeddings = np.load(self.embeddings_dir /"embeddings.npy")
+        labels = np.load(self.embeddings_dir /"labels_embeddings.npy")
+        assert len(embeddings) == len(labels), "Mismatch between embeddings and labels"
+    
+        idx = 0
+        for i in range(len(embeddings)):
+            segment = embeddings[i]  # shape: [19, D]
+
+            # Normalize across nodes (per feature)
+            mean = segment.mean(axis=0, keepdims=True)
+            std = segment.std(axis=0, keepdims=True) + 1e-6
+            segment_signal = (segment - mean) / std
+
+            y = torch.tensor(
+                [labels[i]], dtype=torch.float
+            ) 
+            x = torch.tensor(segment_signal.flatten(), dtype=torch.float32) 
+            
+
+            self.samples.append((x, y))
+
+    
+
+    def _process_features(self):
+        extracted_features = np.load(self.extracted_features_dir / "X_train.npy")
+        for index, segment_signal in enumerate(
+            extracted_features
+        ):  # (samples, extracted_features*electrodes)
+            segment_signal = segment_signal.reshape(
+                self.n_channels, -1
+            )  # (channels, features)
+            # Normalize features
+            mean = segment_signal.mean(axis=0, keepdims=True)
+            std = segment_signal.std(axis=0, keepdims=True) + 1e-6
+            segment_signal = (segment_signal - mean) / std
+
+            y = torch.tensor(
+                [self.clips["label"].values[index]], dtype=torch.float
+            ) 
+            x = torch.tensor(segment_signal.flatten(), dtype=torch.float32) 
+            
+
+            self.samples.append((x, y))
+
 
     def _process_sessions(self):
         sessions = list(self.clips.groupby(["patient", "session"]))
