@@ -168,11 +168,14 @@ def process_session_for_features(
     return features_list_for_session, all_original_indices
 
 
+IS_SCITAS = False
 if __name__ == "__main__":
-    DATA_ROOT = Path("data")
-    (DATA_ROOT / "extracted_features").mkdir(parents=True, exist_ok=True)
-    (DATA_ROOT / "labels").mkdir(parents=True, exist_ok=True)
-    print(f"Looking for data in: {DATA_ROOT.resolve()}")
+    LOCAL_DATA_ROOT = Path("data")
+    (LOCAL_DATA_ROOT / "extracted_features").mkdir(parents=True, exist_ok=True)
+    (LOCAL_DATA_ROOT / "labels").mkdir(parents=True, exist_ok=True)
+    
+    DATA_ROOT= Path("/home/ogut/data") if IS_SCITAS else Path("data")
+    print(f"Looking for data in: {LOCAL_DATA_ROOT.resolve()}")
 
     try:
         clips_tr_full = pd.read_parquet(
@@ -235,7 +238,7 @@ if __name__ == "__main__":
     train_processing_results = Parallel(n_jobs=-1)(
         delayed(process_session_for_features)(
             session_group,
-            base_signal_path=DATA_ROOT / "train",
+            base_signal_path=LOCAL_DATA_ROOT / "train",
             bp_filter_coeffs=bp_filter_coeffs_sos,
             notch_filter_coeffs=notch_filter_coeffs_sos,
             f_s=F_S
@@ -295,7 +298,7 @@ if __name__ == "__main__":
     test_processing_results = Parallel(n_jobs=-1)(
         delayed(process_session_for_features)(
             session_group,
-            base_signal_path=DATA_ROOT / "test",
+            base_signal_path=LOCAL_DATA_ROOT / "test",
             bp_filter_coeffs=bp_filter_coeffs_sos,
             notch_filter_coeffs=notch_filter_coeffs_sos,
             f_s=F_S
@@ -320,22 +323,22 @@ if __name__ == "__main__":
     # --- Save arrays ---
     print("\n💾 Saving extracted feature arrays...")
     if X_test.size > 0:
-        np.save(DATA_ROOT / "extracted_features/X_test.npy", X_test)
+        np.save(LOCAL_DATA_ROOT / "extracted_features/X_test.npy", X_test)
     else:
         print("X_test is empty, not saving.")
 
     if X_train.size > 0:
-        np.save(DATA_ROOT / "extracted_features/X_train.npy", X_train)
+        np.save(LOCAL_DATA_ROOT / "extracted_features/X_train.npy", X_train)
     else:
         print("X_train is empty, not saving.")
 
     if y_train.size > 0:
-        np.save(DATA_ROOT / "labels/y_train.npy", y_train)
+        np.save(LOCAL_DATA_ROOT / "labels/y_train.npy", y_train)
     else:
         print("y_train is empty, not saving.")
 
     if sample_subject_list_train.size > 0:
-        np.save(DATA_ROOT / "extracted_features/sample_subject_array_train.npy",
+        np.save(LOCAL_DATA_ROOT / "extracted_features/sample_subject_array_train.npy",
                 sample_subject_list_train)
     else:
         print("sample_subject_list_train is empty, not saving.")
