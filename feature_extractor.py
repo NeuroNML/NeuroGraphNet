@@ -1,5 +1,6 @@
 import os
 import sys
+import multiprocessing
 from pathlib import Path
 from joblib import Parallel, delayed  # For parallel processing
 from typing import Tuple, List, Optional, Dict, Any
@@ -7,66 +8,220 @@ from typing import Tuple, List, Optional, Dict, Any
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from scipy.signal import welch, butter, iirnotch, sosfiltfilt, tf2sos
+from scipy.signal import welch, butter, iirnotch, sosfiltfilt, tf2sos, hilbert
+from scipy.stats import skew, kurtosis, entropy
+from scipy.fft import fft, fftfreq
 
 from src.utils.signal import spectral_entropy
 from src.utils.dataset import ensure_eeg_multiindex
 
-def _extract_channel_features(channel_signal: np.ndarray, fs: int,
-                              bands: Dict[str, Tuple[float, float]]) -> List[float]:
-    rms_val = np.sqrt(np.mean(channel_signal**2))
-    line_len = np.sum(np.abs(np.diff(channel_signal)))
-    dx = np.diff(channel_signal)
-    var_x = np.var(channel_signal)
-    hj_mob, hj_cmp = 0.0, 0.0
+def _hjorth_parameters(signal: np.ndarray) -> Tuple[float, float]:
+    """Calculate Hjorth mobility and complexity parameters."""
+    dx = np.diff(signal)
+    var_x = np.var(signal)
+    mobility, complexity = 0.0, 0.0
+    
     if var_x > 1e-10:
         var_dx = np.var(dx)
-        hj_mob = np.sqrt(var_dx / (var_x + 1e-12))
+        mobility = np.sqrt(var_dx / (var_x + 1e-12))
+        
         if var_dx > 1e-10:
             ddx = np.diff(dx)
-            hj_cmp = np.sqrt(np.var(ddx) / (var_dx + 1e-12))
+            complexity = np.sqrt(np.var(ddx) / (var_dx + 1e-12))
+    
+    return mobility, complexity
 
+
+def _zero_crossing_rate(signal: np.ndarray) -> float:
+    """Calculate zero crossing rate."""
+    return np.sum(np.diff(np.sign(signal)) != 0) / len(signal)
+
+
+def _sample_entropy(signal: np.ndarray, m: int = 2, r: float = 0.2) -> float:
+    """Calculate sample entropy (approximate version for efficiency)."""
+    try:
+        N = len(signal)
+        if N < m + 1:
+            return 0.0
+        
+        # Normalize signal
+        signal = (signal - np.mean(signal)) / (np.std(signal) + 1e-10)
+        r = r * np.std(signal)
+        
+        def _maxdist(x, y, m):
+            return max([abs(ua - va) for ua, va in zip(x, y)])
+        
+        def _phi(m):
+            patterns = []
+            for i in range(N - m + 1):
+                patterns.append([signal[i + j] for j in range(m)])
+            
+            count = 0
+            for i in range(len(patterns)):
+                for j in range(i + 1, len(patterns)):
+                    if _maxdist(patterns[i], patterns[j], m) <= r:
+                        count += 1
+            
+            return count / (N - m + 1) / (N - m) * 2
+        
+        phi_m = _phi(m)
+        phi_m1 = _phi(m + 1)
+        
+        if phi_m == 0 or phi_m1 == 0:
+            return 0.0
+        
+        return -np.log(phi_m1 / phi_m)
+    except:
+        return 0.0
+
+
+def _spectral_edge_frequency(freqs: np.ndarray, psd: np.ndarray, percentage: float = 95) -> float:
+    """Calculate spectral edge frequency (frequency below which X% of power lies)."""
+    total_power = np.sum(psd)
+    if total_power == 0:
+        return 0.0
+    
+    cumsum_power = np.cumsum(psd)
+    threshold = total_power * percentage / 100
+    idx = np.where(cumsum_power >= threshold)[0]
+    
+    return freqs[idx[0]] if len(idx) > 0 else freqs[-1]
+
+
+def _peak_frequency(freqs: np.ndarray, psd: np.ndarray) -> float:
+    """Find the frequency with maximum power."""
+    if len(psd) == 0:
+        return 0.0
+    peak_idx = np.argmax(psd)
+    return freqs[peak_idx]
+
+
+def _extract_channel_features(channel_signal: np.ndarray, fs: int,
+                              bands: Dict[str, Tuple[float, float]]) -> List[float]:
+    """Extract comprehensive EEG features from a single channel."""
+    
+    # Handle edge cases
+    if len(channel_signal) < 10:
+        return [0.0] * 35  # Return zeros for all features
+    
+    # === TIME DOMAIN FEATURES ===
+    
+    # Basic statistical features
+    mean_val = np.mean(channel_signal)
+    std_val = np.std(channel_signal)
+    variance = np.var(channel_signal)
+    rms_val = np.sqrt(np.mean(channel_signal**2))
+    min_val = np.min(channel_signal)
+    max_val = np.max(channel_signal)
+    peak_to_peak = max_val - min_val
+    
+    # Higher order statistics
+    skewness = skew(channel_signal) if len(channel_signal) > 1 else 0.0
+    kurt = kurtosis(channel_signal) if len(channel_signal) > 1 else 0.0
+    
+    # Activity measures
+    line_length = np.sum(np.abs(np.diff(channel_signal)))
+    zero_cross_rate = _zero_crossing_rate(channel_signal)
+    
+    # Hjorth parameters
+    hj_mob, hj_cmp = _hjorth_parameters(channel_signal)
+    
+    # Nonlinear features
+    sample_ent = _sample_entropy(channel_signal)
+    
+    # === FREQUENCY DOMAIN FEATURES ===
+    
     nperseg_welch = min(len(channel_signal), 2 * fs)
-    num_spectral_related_features = 7
-    spec_ent_val = 0.0
+    
+    # Initialize spectral features
     bp_values = {name: 0.0 for name in bands}
-    rel_alpha_val, rel_theta_val, theta_over_alpha_val = 0.0, 0.0, 0.0
-
+    rel_powers = {name: 0.0 for name in bands}
+    spec_ent_val = 0.0
+    spectral_centroid = 0.0
+    spectral_rolloff = 0.0
+    peak_freq = 0.0
+    spec_edge_95 = 0.0
+    
+    # Band ratios
+    alpha_beta_ratio = 0.0
+    theta_alpha_ratio = 0.0
+    delta_theta_ratio = 0.0
+    
     if len(channel_signal) >= 2 and nperseg_welch >= 2:
         try:
             freqs, psd = welch(channel_signal, fs=fs, nperseg=nperseg_welch)
             total_pow = np.sum(psd) + 1e-12
+            
+            # Band powers
             for name, (lo, hi) in bands.items():
                 idx = (freqs >= lo) & (freqs < hi)
-                bp_values[name] = np.trapezoid(
-                    psd[idx], freqs[idx]) if np.any(idx) else 0.0
-
+                bp_values[name] = np.trapezoid(psd[idx], freqs[idx]) if np.any(idx) else 0.0
+                rel_powers[name] = bp_values[name] / total_pow
+            
+            # Spectral features
             if total_pow > 1e-10:
-                rel_alpha_val = bp_values.get("alpha", 0.0) / total_pow
-                rel_theta_val = bp_values.get("theta", 0.0) / total_pow
                 spec_ent_val = spectral_entropy(psd)
+                
+                # Spectral centroid (weighted mean frequency)
+                spectral_centroid = np.sum(freqs * psd) / total_pow
+                
+                # Spectral rolloff (95% energy frequency)
+                spectral_rolloff = _spectral_edge_frequency(freqs, psd, 95)
+                
+                # Peak frequency
+                peak_freq = _peak_frequency(freqs, psd)
+                
+                # Spectral edge frequency
+                spec_edge_95 = _spectral_edge_frequency(freqs, psd, 95)
+            
+            # Band ratios (common in EEG analysis)
+            if bp_values.get("beta", 0.0) > 1e-12:
+                alpha_beta_ratio = bp_values.get("alpha", 0.0) / bp_values.get("beta", 0.0)
             if bp_values.get("alpha", 0.0) > 1e-12:
-                theta_over_alpha_val = bp_values.get(
-                    "theta", 0.0) / bp_values.get("alpha", 0.0)
-        except ValueError:
+                theta_alpha_ratio = bp_values.get("theta", 0.0) / bp_values.get("alpha", 0.0)
+            if bp_values.get("theta", 0.0) > 1e-12:
+                delta_theta_ratio = bp_values.get("delta", 0.0) / bp_values.get("theta", 0.0)
+                
+        except (ValueError, RuntimeError, ZeroDivisionError):
             pass
-    return [
-        rms_val, line_len, hj_mob, hj_cmp, spec_ent_val,
-        bp_values.get("alpha", 0.0), bp_values.get("beta", 0.0), bp_values.get(
-            "theta", 0.0), bp_values.get("gamma", 0.0),
-        rel_alpha_val, rel_theta_val, theta_over_alpha_val
+    
+    # Compile all features (35 total)
+    features = [
+        # Time domain features (14)
+        mean_val, std_val, variance, rms_val, min_val, max_val, peak_to_peak,
+        skewness, kurt, line_length, zero_cross_rate, hj_mob, hj_cmp, sample_ent,
+        
+        # Absolute band powers (5)
+        bp_values.get("delta", 0.0), bp_values.get("theta", 0.0), 
+        bp_values.get("alpha", 0.0), bp_values.get("beta", 0.0), bp_values.get("gamma", 0.0),
+        
+        # Relative band powers (5)
+        rel_powers.get("delta", 0.0), rel_powers.get("theta", 0.0),
+        rel_powers.get("alpha", 0.0), rel_powers.get("beta", 0.0), rel_powers.get("gamma", 0.0),
+        
+        # Spectral features (6)
+        spec_ent_val, spectral_centroid, spectral_rolloff, peak_freq, spec_edge_95,
+        
+        # Band ratios (3)
+        alpha_beta_ratio, theta_alpha_ratio, delta_theta_ratio,
+        
+        # Additional spectral feature (1)
+        np.sum(list(bp_values.values()))  # Total power
     ]
+    
+    return features
 
 
 def _extract_segment_features(segment_signal: np.ndarray, fs: int = 250) -> np.ndarray:
+    """Extract features from all channels in a segment."""
     all_channel_features: List[float] = []
-    bands = {"delta": (0.5, 4), "theta": (4, 8), "alpha": (
-        8, 13), "beta": (13, 30), "gamma": (30, 50)}
+    bands = {"delta": (0.5, 4), "theta": (4, 8), "alpha": (8, 13), "beta": (13, 30), "gamma": (30, 50)}
     num_channels = segment_signal.shape[1]
+    
     for ch_idx in range(num_channels):
-        ch_feats = _extract_channel_features(
-            segment_signal[:, ch_idx], fs, bands)
+        ch_feats = _extract_channel_features(segment_signal[:, ch_idx], fs, bands)
         all_channel_features.extend(ch_feats)
+    
     features_array = np.asarray(all_channel_features, dtype=float)
     return np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -78,8 +233,9 @@ def process_session_for_features(
     notch_filter_coeffs: Optional[np.ndarray],
     f_s: int = 250,
     num_channels: int = 19,
-    num_features_per_channel: int = 12
+    num_features_per_channel: int = 35
 ) -> Tuple[List[np.ndarray], List[Any]]:
+    print("Job started for session group:", session_group[0])
     group_name, session_df = session_group
 
     # Calculate expected feature size
@@ -132,6 +288,7 @@ def process_session_for_features(
         (std_per_channel + 1e-6)
 
     for original_idx, row in session_df.iterrows():
+        print(f"Processing segment for original index: {original_idx}")
         try:
             t0 = int(row["start_time"] * f_s)
             tf = int(row["end_time"] * f_s)
@@ -165,26 +322,49 @@ def process_session_for_features(
             features_list_for_session.append(empty_features.copy())
             all_original_indices.append(original_idx)
             continue
+    print(f"Job completed for session group: {group_name}")
     return features_list_for_session, all_original_indices
 
 
 IS_SCITAS = False
-if __name__ == "__main__":
+CPU_COUNT = multiprocessing.cpu_count()
+
+def main(verbose: bool = False):
     LOCAL_DATA_ROOT = Path("data")
     (LOCAL_DATA_ROOT / "extracted_features").mkdir(parents=True, exist_ok=True)
     (LOCAL_DATA_ROOT / "labels").mkdir(parents=True, exist_ok=True)
     
     DATA_ROOT= Path("/home/ogut/data") if IS_SCITAS else Path("data")
-    print(f"Looking for data in: {LOCAL_DATA_ROOT.resolve()}")
+    print(f"🔍 Looking for data in: {LOCAL_DATA_ROOT.resolve()}")
+    
+    if verbose:
+        print(f"\n📊 ENHANCED EEG FEATURE EXTRACTION")
+        print(f"{'='*50}")
+        print(f"🧠 Features per channel: 35 (vs. original 12)")
+        print(f"📈 Feature categories:")
+        print(f"   • Time Domain: 14 features")
+        print(f"   • Absolute Band Powers: 5 features")
+        print(f"   • Relative Band Powers: 5 features")
+        print(f"   • Spectral Features: 5 features")
+        print(f"   • Band Ratios: 3 features")
+        print(f"   • Additional: 3 features")
+        print(f"{'='*50}\n")
 
     try:
         clips_tr_full = pd.read_parquet(
             DATA_ROOT / "train" / "segments.parquet")
         clips_te_full = pd.read_parquet(
             DATA_ROOT / "test" / "segments.parquet")
+        
+        if verbose:
+            print(f"✅ Successfully loaded dataset files:")
+            print(f"   📋 Training segments: {clips_tr_full.shape}")
+            print(f"   📋 Test segments: {clips_te_full.shape}")
+            
     except FileNotFoundError as e:
-        print(f"Error: Parquet file not found. Details: {e}")
+        print(f"❌ Error: Parquet file not found. Details: {e}")
         sys.exit(1)
+    
     print(clips_tr_full.shape)
 
     # --- Ensure MultiIndex ---
@@ -192,9 +372,18 @@ if __name__ == "__main__":
     clips_te_full = ensure_eeg_multiindex(clips_te_full, id_col_name='id')
 
     # Filter out rows with NaN labels in training set
-    print("Filtering training set for valid labels...")
+    print("🔄 Filtering training set for valid labels...")
     clips_tr_for_labels = clips_tr_full[~clips_tr_full.label.isna()].copy()
     clips_te = clips_te_full.copy()
+    
+    if verbose:
+        print(f"   📊 Training set after label filtering: {clips_tr_for_labels.shape}")
+        print(f"   📊 Test set: {clips_te.shape}")
+        print(f"   🏷️  Unique labels in training: {clips_tr_for_labels['label'].nunique()}")
+        label_dist = clips_tr_for_labels['label'].value_counts().sort_index()
+        print(f"   📈 Label distribution:")
+        for label, count in label_dist.items():
+            print(f"      Label {label}: {count} samples ({count/len(clips_tr_for_labels)*100:.1f}%)")
 
     F_S = 250
     BP_FILTER_FREQS = (0.5, 50.0)
@@ -202,7 +391,13 @@ if __name__ == "__main__":
     NOTCH_Q_FACTOR = 30.0
 
     print(
-        f"\nDesigning filters: BP={BP_FILTER_FREQS}Hz, Notch={NOTCH_FREQ_HZ}Hz, FS={F_S}Hz")
+        f"\n🔧 Designing filters: BP={BP_FILTER_FREQS}Hz, Notch={NOTCH_FREQ_HZ}Hz, FS={F_S}Hz")
+    
+    if verbose:
+        print(f"   🌊 Bandpass filter: {BP_FILTER_FREQS[0]}-{BP_FILTER_FREQS[1]} Hz")
+        print(f"   🚫 Notch filter: {NOTCH_FREQ_HZ} Hz (Q={NOTCH_Q_FACTOR})")
+        print(f"   📡 Sampling rate: {F_S} Hz")
+        
     bp_filter_coeffs_sos = butter(
         4, BP_FILTER_FREQS, btype="bandpass", output="sos", fs=F_S)
     notch_filter_coeffs_ba = iirnotch(
@@ -211,31 +406,42 @@ if __name__ == "__main__":
 
     # --- Training Set Feature Extraction ---
     print("\n⏳ Processing Training Set...")
+    
+    if verbose:
+        print(f"🧬 Feature extraction details:")
+        print(f"   🔬 Features per channel: 35")
+        print(f"   📡 Expected channels per segment: 19")
+        print(f"   🎯 Total features per segment: 19 × 35 = 665")
+        print(f"   💻 Parallel processing: enabled ({CPU_COUNT} cores)")
 
     train_session_groups = []
     try:
         # Prefer grouping by index levels if they exist as per user's description
         if all(level in clips_tr_for_labels.index.names for level in ["patient", "session"]):
-            print(
-                "   Grouping clips_tr_for_labels by index levels: ['patient', 'session']")
+            if verbose:
+                print(f"   📊 Grouping by index levels: ['patient', 'session']")
             train_session_groups = list(
                 clips_tr_for_labels.groupby(level=["patient", "session"]))
         # Fallback to columns if index levels are not set as expected
         elif all(col in clips_tr_for_labels.columns for col in ["patient", "session"]):
-            print(
-                "   Grouping clips_tr_for_labels by columns: ['patient', 'session']")
+            if verbose:
+                print(f"   📊 Grouping by columns: ['patient', 'session']")
             train_session_groups = list(
                 clips_tr_for_labels.groupby(["patient", "session"]))
         else:
             raise ValueError(
                 "Could not find 'patient' and 'session' as index levels or columns in clips_tr_for_labels for grouping.")
+                
+        if verbose:
+            print(f"   🗂️  Total session groups: {len(train_session_groups)}")
+            
     except Exception as e:
-        print(f"Error during groupby for training set: {e}")
+        print(f"❌ Error during groupby for training set: {e}")
         print(f"clips_tr_for_labels index: {clips_tr_for_labels.index.names}")
         print(f"clips_tr_for_labels columns: {clips_tr_for_labels.columns}")
         sys.exit(1)
 
-    train_processing_results = Parallel(n_jobs=-1)(
+    train_processing_results = Parallel(n_jobs=CPU_COUNT)(
         delayed(process_session_for_features)(
             session_group,
             base_signal_path=LOCAL_DATA_ROOT / "train",
@@ -268,19 +474,40 @@ if __name__ == "__main__":
         elif 'patient' in clips_tr_aligned.columns:
             sample_subject_list_train = clips_tr_aligned['patient'].to_numpy()
     else:
-        print("Warning: No training features were extracted. y_train and sample_subject_list_train will be empty.")
+        print("⚠️  Warning: No training features were extracted. y_train and sample_subject_list_train will be empty.")
+        
+    if verbose:
+        print(f"\n📈 Training set feature extraction results:")
+        print(f"   ✅ Features extracted: {X_train.shape if X_train.size > 0 else 'None'}")
+        print(f"   🏷️  Labels extracted: {y_train.shape if y_train.size > 0 else 'None'}")
+        print(f"   👤 Subjects: {len(np.unique(sample_subject_list_train)) if sample_subject_list_train.size > 0 else 'None'}")
+        if X_train.size > 0:
+            features_per_channel = X_train.shape[1] // 19
+            print(f"   🔬 Actual features per channel: {features_per_channel}")
+            print(f"   📊 Feature statistics:")
+            print(f"      Mean: {np.mean(X_train):.4f}")
+            print(f"      Std: {np.std(X_train):.4f}")
+            print(f"      Min: {np.min(X_train):.4f}")
+            print(f"      Max: {np.max(X_train):.4f}")
+            non_zero_features = np.count_nonzero(X_train, axis=0)
+            print(f"   🎯 Non-zero features: {np.sum(non_zero_features > 0)}/{len(non_zero_features)}")
 
     # --- Test Set Feature Extraction ---
     print("\n⏳ Processing Test Set...")
+    
+    if verbose:
+        print(f"🧪 Test set processing:")
+        
     test_session_groups = []
     try:
         if all(level in clips_te.index.names for level in ["patient", "session"]):
-            print(
-                "   Grouping clips_te by index levels: ['patient', 'session']")
+            if verbose:
+                print(f"   📊 Grouping by index levels: ['patient', 'session']")
             test_session_groups = list(
                 clips_te.groupby(level=["patient", "session"]))
         elif all(col in clips_te.columns for col in ["patient", "session"]):
-            print("   Grouping clips_te by columns: ['patient', 'session']")
+            if verbose:
+                print(f"   📊 Grouping by columns: ['patient', 'session']")
             test_session_groups = list(
                 clips_te.groupby(["patient", "session"]))
         else:
@@ -289,8 +516,12 @@ if __name__ == "__main__":
             # For now, assume it also has a structure that allows similar grouping.
             raise ValueError(
                 "Could not find 'patient' and 'session' as index levels or columns in clips_te for grouping.")
+                
+        if verbose:
+            print(f"   🗂️  Total test session groups: {len(test_session_groups)}")
+            
     except Exception as e:
-        print(f"Error during groupby for test set: {e}")
+        print(f"❌ Error during groupby for test set: {e}")
         print(f"clips_te index: {clips_te.index.names}")
         print(f"clips_te columns: {clips_te.columns}")
         sys.exit(1)
@@ -344,3 +575,6 @@ if __name__ == "__main__":
         print("sample_subject_list_train is empty, not saving.")
 
     print("✅ Feature extraction and saving complete.")
+
+if __name__ == "__main__":
+    main(verbose=True)

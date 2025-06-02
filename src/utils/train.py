@@ -177,11 +177,10 @@ def train_model(
                                curr_batch.edge_index, 
                                curr_batch.batch if hasattr(curr_batch, 'batch') else None)
             else:
-                # Non-GNN model: assumes data_batch_item is a tuple (features, labels)
+                # Non-GNN model: assumes data_batch_item is a PyG Batch object
                 curr_batch = data_batch_item.to(device)
                 y_targets = curr_batch.y
                 y_targets = y_targets.float().unsqueeze(1)
-                logits = model(curr_batch.x)
                 n_channels = 19 # Default value for non-GNN models
 
                 assert n_channels is not None and n_channels > 0, "n_channels must be a positive integer."
@@ -263,11 +262,38 @@ def train_model(
                                    curr_batch.edge_index, 
                                    curr_batch.batch if hasattr(curr_batch, 'batch') else None)
                 else:
-                    # Non-GNN model: assumes data_batch_item is a tuple (features, labels)
+                    # Non-GNN model: assumes data_batch_item is a PyG Batch object
                     curr_batch = data_batch_item.to(device)
                     y_targets = curr_batch.y
                     y_targets = y_targets.float().unsqueeze(1)
-                    logits = model(curr_batch.x)
+                    n_channels = 19  # Default value for non-GNN models
+
+                    if curr_batch.num_graphs > 0:
+                        # get node features tensor from the batch
+                        node_features_tensor = curr_batch.x
+                        
+                        # if node_features_tensor is a 1D tensor, it might be squeezed
+                        if node_features_tensor.ndim == 1:
+                            node_features_tensor = node_features_tensor.unsqueeze(-1)
+                        
+                        # store the number of features per channel
+                        num_features_per_channel = node_features_tensor.size(1)
+                        expected_total_nodes = curr_batch.num_graphs * n_channels
+
+                        if node_features_tensor.size(0) == expected_total_nodes:
+                            input_features = node_features_tensor.view(curr_batch.num_graphs, n_channels, num_features_per_channel)
+                        else:
+                            # This path handles cases where node count might not perfectly align or as a safety measure.
+                            input_features, _ = to_dense_batch(node_features_tensor, curr_batch.batch, max_num_nodes=n_channels)
+                    elif curr_batch.num_graphs == 0: # Empty batch
+                        continue  # Skip empty batch in validation
+                    else: # Should not happen (num_graphs_in_batch < 0)
+                        raise ValueError(f"Unexpected num_graphs_in_batch: {curr_batch.num_graphs}. Ensure your DataLoader is correctly configured.")
+
+                    # Convert input features to float if necessary
+                    input_features = input_features.float()
+                    # Compute logits from the model
+                    logits = model(input_features)
 
                 epoch_val_loss += criterion(logits, y_targets).item()
                 all_val_preds.append(logits.sigmoid().cpu())
