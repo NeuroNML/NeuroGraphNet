@@ -10,5 +10,7 @@ __pycache__
 *.log
 
 # avoid pushing processed segments cached
-data/graph_dataset
-data/graph_dataset/*
+data/graph_dataset_*/
+data/extracted_features/
+data/labels/
+.vscode/

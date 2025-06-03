@@ -8,8 +8,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=20
-#SBATCH --mem=32GB
-#SBATCH --time=02:00:00
+#SBATCH --mem=16gb
+#SBATCH --time=03:00:00
 
 echo "Loading modules…"
 module load gcc python
