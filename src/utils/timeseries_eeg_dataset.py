@@ -36,7 +36,7 @@ class TimeseriesEEGDataset(Dataset):
         force_reprocess: bool = False, # Force reprocessing and overwrite cached data
         prefetch_data: bool = False, # Load all data into memory
     ):
-        print(f"🚀 Initializing EEGTimeSeriesDataset in {mode.upper()} mode.")
+        print(f"🚀 Initializing TimeseriesEEGDataset in {mode.upper()} mode.")
         self.clips_df = clips_df
         self.signal_folder = Path(signal_folder)
         self.mode = mode.lower()
@@ -91,6 +91,11 @@ class TimeseriesEEGDataset(Dataset):
                  self.segment_length_timesteps = segment_length_timesteps
             print(f"   - Segment length: {self.segment_length_timesteps} timesteps.")
             
+            # Check if labels are available (they might not be for test sets)
+            self.has_labels = ClipsDF.label in self.clips_df.columns
+            if not self.has_labels:
+                print(f"   ⚠️ Info: Column '{ClipsDF.label}' not found in clips_df. Processing without labels (e.g., test set).")
+            
             if self.apply_filtering:
                 self.bp_filter_coeffs = signal.butter(4, self.bandpass_frequencies, btype="bandpass",
                                                       output="sos", fs=self.sampling_rate)
@@ -120,8 +125,11 @@ class TimeseriesEEGDataset(Dataset):
             if len(self.feature_data) != len(self.clips_df):
                  print(f"   ⚠️ Warning: Feature data length ({len(self.feature_data)}) "
                        f"differs from clips_df length ({len(self.clips_df)}). Label alignment might be incorrect.")
-            if ClipsDF.label not in self.clips_df.columns:
-                raise ValueError(f"Column '{ClipsDF.label}' for labels not found in clips_df for feature mode.")
+            
+            # Check if labels are available (they might not be for test sets)
+            self.has_labels = ClipsDF.label in self.clips_df.columns
+            if not self.has_labels:
+                print(f"   ⚠️ Info: Column '{ClipsDF.label}' not found in clips_df. Processing without labels (e.g., test set).")
             
             # Set up caching prefix and check for existing cache
             self._current_file_prefix = self._determine_prefix_for_mode()
@@ -136,12 +144,21 @@ class TimeseriesEEGDataset(Dataset):
                 self._process_features()
 
         elif self.mode == "embedding":
-            if embedding_file_path is None or labels_for_embedding_file_path is None:
-                raise ValueError("embedding_file_path and labels_for_embedding_file_path must be provided for embedding mode.")
+            if embedding_file_path is None:
+                raise ValueError("embedding_file_path must be provided for embedding mode.")
             self.embedding_data = np.load(embedding_file_path)
-            self.embedding_labels = np.load(labels_for_embedding_file_path)
-            if len(self.embedding_data) != len(self.embedding_labels):
-                raise ValueError("Mismatch between length of embedding data and embedding labels.")
+            
+            # Labels are optional for test sets
+            if labels_for_embedding_file_path is not None:
+                self.embedding_labels = np.load(labels_for_embedding_file_path)
+                if len(self.embedding_data) != len(self.embedding_labels):
+                    raise ValueError("Mismatch between length of embedding data and embedding labels.")
+                self.has_labels = True
+            else:
+                self.embedding_labels = None
+                self.has_labels = False
+                print(f"   ⚠️ Info: No labels provided for embeddings. Processing without labels (e.g., test set).")
+                
             if self.embedding_data.ndim !=3 or self.embedding_data.shape[1] != self.n_channels: # Expect [N, C, D_embed]
                  raise ValueError(f"Embedding data shape unexpected: {self.embedding_data.shape}. Expected [N, {self.n_channels}, Dimensions].")
             
@@ -164,7 +181,7 @@ class TimeseriesEEGDataset(Dataset):
             self._prefetch_data()
         
         final_count = self._processed_items_count if self.root and self._processed_items_count > 0 else len(self.samples)
-        print(f"🏁 EEGTimeSeriesDataset initialization complete. Loaded {final_count} samples.")
+        print(f"🏁 TimeseriesEEGDataset initialization complete. Loaded {final_count} samples.")
 
     def _filter_signal(self, eeg_data_time_channels: np.ndarray) -> np.ndarray:
         # Input: [Time, Channels]
@@ -220,7 +237,12 @@ class TimeseriesEEGDataset(Dataset):
                 std = segment_embedding.std(axis=1, keepdims=True) + 1e-6
                 segment_embedding = (segment_embedding - mean) / std
 
-            y = torch.tensor([self.embedding_labels[i]], dtype=torch.float)
+            # Handle labels: create label tensor only if labels are available
+            if self.has_labels:
+                y = torch.tensor([self.embedding_labels[i]], dtype=torch.float)
+            else:
+                y = None  # No labels for test set
+                
             # Output x: can be [C, D_embed] or flattened.
             # Original dataset_no_graph.py flattened it. Let's keep that for typical non-GNN models.
             x = torch.tensor(segment_embedding.flatten(), dtype=torch.float32) # Flattened: [C * D_embed]
@@ -267,11 +289,16 @@ class TimeseriesEEGDataset(Dataset):
                 segment_features = (segment_features - mean) / std
             
             if index >= len(self.clips_df):
-                print(f"   ⚠️ Feature index {index} out of bounds for clips_df (len {len(self.clips_df)}), cannot get label. Skipping.")
+                print(f"   ⚠️ Feature index {index} out of bounds for clips_df (len {len(self.clips_df)}), cannot get metadata. Skipping.")
                 continue
-            label_val = self.clips_df[ClipsDF.label].iloc[index]
+            
+            # Handle labels: create label tensor only if labels are available
+            if self.has_labels:
+                label_val = self.clips_df[ClipsDF.label].iloc[index]
+                y = torch.tensor([label_val], dtype=torch.float)
+            else:
+                y = None  # No labels for test set
 
-            y = torch.tensor([label_val], dtype=torch.float)
             # Output x: Flattened [C * F_feat_per_channel]
             x = torch.tensor(segment_features.flatten(), dtype=torch.float32)
             
@@ -353,7 +380,12 @@ class TimeseriesEEGDataset(Dataset):
                 x_tensor_data = processed_segment.T # Transpose to [Channels, Time]
                 
                 x = torch.tensor(x_tensor_data, dtype=torch.float32)
-                y = torch.tensor([row_data[ClipsDF.label]], dtype=torch.float)
+                
+                # Handle labels: create label tensor only if labels are available
+                if self.has_labels:
+                    y = torch.tensor([row_data[ClipsDF.label]], dtype=torch.float)
+                else:
+                    y = None  # No labels for test set
                 
                 if self.root:
                     self._save_processed_item(x, y, processed_count)
@@ -411,7 +443,7 @@ class TimeseriesEEGDataset(Dataset):
         except Exception as e:
             raise RuntimeError(f"Error loading cached file {file_path}: {e}")
     
-    def _save_processed_item(self, x: torch.Tensor, y: torch.Tensor, idx: int):
+    def _save_processed_item(self, x: torch.Tensor, y: Optional[torch.Tensor], idx: int):
         """Save a processed item to disk."""
         if not self.root:
             return  # No caching if root not set
