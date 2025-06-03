@@ -351,9 +351,12 @@ class GraphEEGDataset(Dataset):
             return self._create_spatial_edges()
         elif self.edge_strategy == "correlation":
             return self._create_correlation_edges(signal_data)
+        elif self.edge_strategy == "full": 
+            return self._create_fully_connected_edges()
         else:
             raise ValueError(f"Unknown edge strategy: {self.edge_strategy}")
 
+            
     def _create_spatial_edges(self) -> torch.Tensor:
         """
         Creates edges based on spatial distances between electrodes.
@@ -378,7 +381,7 @@ class GraphEEGDataset(Dataset):
                         (ch1, ch2), 1.0
                     )  # Get keys (tuple) from dict
 
-                    # Add edge if distance is within threshold (you can adjust this logic)
+                     # Add edge if distance is within threshold (you can adjust this logic)
                     # Here we're adding all edges but you might want to threshold
                     G.add_edge(i, j, weight=distance)
                     edge_list.append([i, j])
@@ -418,6 +421,23 @@ class GraphEEGDataset(Dataset):
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         # [num_edges, 2] → [2, num_edges]; contiguous(): for row-major order
         return edge_index
+    def _create_fully_connected_edges(self) -> torch.Tensor:
+        """
+        Creates a fully connected undirected graph of electrodes.
+
+        Returns:
+            torch.Tensor: Edge index tensor
+        """
+        num_nodes = len(self.channels)
+        edge_list = []
+
+        for i in range(num_nodes):
+            for j in range(num_nodes):
+                if i != j:
+                    edge_list.append([i, j])  # Include edge in both directions
+
+        edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        return edge_index
 
     def len(self) -> int:
         """
@@ -430,7 +450,7 @@ class GraphEEGDataset(Dataset):
         Returns the data object at index idx.
         """
         data = torch.load(
-            osp.join(self.processed_dir, f"data_{idx}.pt")
+            osp.join(self.processed_dir, f"data_{idx}.pt"), weights_only=False
         )  # Each pt file contains a Data object / graph representing EEG recording
         return data
 
