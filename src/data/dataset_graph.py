@@ -23,7 +23,7 @@ class GraphEEGDataset(Dataset):
         root: str,
         clips: pd.DataFrame,
         signal_folder: str,
-        embeddings_dir:str,
+        embeddings_dir: str,
         embeddings_train: bool,
         extracted_features_dir: str,
         selected_features_train: bool,
@@ -97,7 +97,7 @@ class GraphEEGDataset(Dataset):
         ]
 
         self.n_channels = len(self.channels)  # Number of EEG channels
-        
+
         # Ids to eliminate
         self.ids_to_eliminate = []
 
@@ -133,7 +133,7 @@ class GraphEEGDataset(Dataset):
 
             if selected_features_train == True:
                 self.process_features()
-                
+
             elif embeddings_train == True:
                 self.process_embeddings()
             else:
@@ -162,8 +162,6 @@ class GraphEEGDataset(Dataset):
             spatial_distances[(ch2, ch1)] = dist
 
         return spatial_distances
-    
-    
 
     def process_embeddings(self):
         """
@@ -173,10 +171,10 @@ class GraphEEGDataset(Dataset):
             embeddings (np.ndarray): shape [N, 19, D]
             labels (np.ndarray): shape [N]
         """
-        embeddings = np.load(self.embeddings_dir /"embeddings.npy")
-        labels = np.load(self.embeddings_dir /"labels_embeddings.npy")
+        embeddings = np.load(self.embeddings_dir / "embeddings.npy")
+        labels = np.load(self.embeddings_dir / "labels_embeddings.npy")
         assert len(embeddings) == len(labels), "Mismatch between embeddings and labels"
-    
+
         idx = 0
         for i in range(len(embeddings)):
             segment = embeddings[i]  # shape: [19, D]
@@ -198,7 +196,6 @@ class GraphEEGDataset(Dataset):
             data = Data(x=x, edge_index=edge_index, y=y)
             torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
             idx += 1
-
 
     def process_features(self):
         """
@@ -223,7 +220,6 @@ class GraphEEGDataset(Dataset):
 
             # Create edges based on the selected strategy
             edge_index = self._create_edges(segment_signal)
-          
 
             if edge_index.shape == torch.Size([0]):
                 self.ids_to_eliminate.append(index)
@@ -240,7 +236,6 @@ class GraphEEGDataset(Dataset):
                 edge_index=edge_index,  # Edges between channels
                 y=y,  # Label
             )
-          
 
             # Save processed data
             torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
@@ -253,9 +248,9 @@ class GraphEEGDataset(Dataset):
         sessions = list(
             self.clips.groupby(["patient", "session"])
         )  # List of tuples: ((patient_id, session_id), session_df)
-      
+
         idx = 0
-        
+
         for (_, _), session_df in sessions:
             # Load signal data (for complete session)
             session_signal = pd.read_parquet(
@@ -266,37 +261,39 @@ class GraphEEGDataset(Dataset):
             session_signal = self._preprocess_signal(session_signal)
 
             #  ------------ Extract corresponding segments from signal ---------------------#
-            
-            for index, row in session_df.iterrows():  # Each row corresponds to a segment
+
+            for (
+                index,
+                row,
+            ) in session_df.iterrows():  # Each row corresponds to a segment
                 start = int(row["start_time"] * self.sampling_rate)
                 end = int(row["end_time"] * self.sampling_rate)
                 segment_signal = session_signal[
                     start:end
                 ].T  # Transpose to get channels as rows: (3000 time points,19 channel)->(19,3000)
-            
+
                 x = torch.tensor(segment_signal, dtype=torch.float)
                 # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
 
                 # Create edges based on the selected strategy
                 edge_index = self._create_edges(segment_signal)
-              
 
                 if edge_index.shape == torch.Size([0]):
                     self.ids_to_eliminate.append(index)
                     continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
- 
+
                 # Create label tensor
                 y = torch.tensor(
                     [row["label"]], dtype=torch.float
                 )  # BCELoss expects float labels
-                
+
                 # Create Data object
                 data = Data(
                     x=x,  # Node features: channels x time points
                     edge_index=edge_index,  # Edges between channels
                     y=y,  # Label
                 )
-                
+
                 # Save processed data
                 torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
                 idx += 1
@@ -345,33 +342,46 @@ class GraphEEGDataset(Dataset):
         """
         Creates edges based on spatial distances between electrodes.
 
+        - If top_k is specified: connects each node to its k closest neighbors.
+        - Otherwise: connects all pairs with distance <= self.distance_threshold.
+
         Returns:
-            torch.Tensor: Edge index tensor
+            torch.Tensor: edge_index tensor for PyTorch Geometric
         """
-        # Create a graph
-        G = nx.Graph()
-
-        # Add nodes
-        for i, channel in enumerate(self.channels):
-            G.add_node(i, name=channel)
-
-        # Add edges based on distances
+        num_channels = len(self.channels)
         edge_list = []
+        adj_dict = defaultdict(list)
+
+        # Build full symmetric distance matrix
+        distance_matrix = np.full((num_channels, num_channels), np.inf)
         for i, ch1 in enumerate(self.channels):
             for j, ch2 in enumerate(self.channels):
-                if i < j:  # Avoid duplicate edges
-                    # Get distance if available, otherwise use a default
-                    distance = self.spatial_distances.get(
-                        (ch1, ch2), 1.0
-                    )  # Get keys (tuple) from dict
+                if i != j:
+                    dist = self.spatial_distances.get(
+                        (ch1, ch2), self.spatial_distances.get((ch2, ch1), np.inf)
+                    )
+                    distance_matrix[i, j] = dist
 
-                    # Add edge if distance is within threshold (you can adjust this logic)
-                    # Here we're adding all edges but you might want to threshold
-                    G.add_edge(i, j, weight=distance)
+        if self.top_k:
+            # Top-k closest neighbors per node
+            for i in range(num_channels):
+                top_indices = np.argsort(distance_matrix[i])[: self.top_k]
+                for j in top_indices:
+                    if j not in adj_dict[i]:
+                        adj_dict[i].append(j)
+                    if i not in adj_dict[j]:
+                        adj_dict[j].append(i)
+
+            for i, neighbors in adj_dict.items():
+                for j in neighbors:
                     edge_list.append([i, j])
-                    edge_list.append([j, i])  # Add in both directions for PyG
+        else:
+            # Fully connected (no self-loops)
+            for i in range(num_channels):
+                for j in range(num_channels):
+                    if i != j:
+                        edge_list.append([i, j])
 
-        # Convert to tensor
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         return edge_index
 
@@ -379,15 +389,14 @@ class GraphEEGDataset(Dataset):
         """
         Creates edges based on correlation between channel signals.
 
-        - If: top-k specified: keeps only top-k strongest edges per node.
-        - If not: adds all edges with nodes above correlation threshold
+        - If self.top_k is set: connects each node to its top-k most correlated neighbors (symmetric).
+        - Otherwise: connects all pairs with correlation >= self.correlation_threshold (symmetric).
 
         Args:
-            signal_data (pd.DataFrame): EEG signal data
-            top_k (int, optional): Number of strongest correlations to keep per node
+            signal_data (pd.DataFrame): EEG signal data (channels x time)
 
         Returns:
-            torch.Tensor: Edge index tensor
+            torch.Tensor: Edge index tensor (2, num_edges)
         """
         corr_matrix = np.abs(np.corrcoef(signal_data))
         if np.isnan(corr_matrix).any():
@@ -395,36 +404,34 @@ class GraphEEGDataset(Dataset):
         if np.isinf(corr_matrix).any():
             raise ValueError("Correlation matrix contains infinite values.")
 
-        edge_list = []
         num_channels = len(self.channels)
+        edge_list = []
 
         if self.top_k:
-
-            adj_dict = defaultdict(list)
+            # Top-k strongest correlations per node (excluding self)
+            adj_dict = defaultdict(set)
 
             for i in range(num_channels):
-                top_indices = np.argsort(-corr_matrix[i])
+                top_indices = np.argsort(-corr_matrix[i])  # descending order
                 count = 0
                 for j in top_indices:
                     if i != j and count < self.top_k:
-                        if j not in adj_dict[i]:
-                            adj_dict[i].append(j)
-                        if i not in adj_dict[j]:
-                            adj_dict[j].append(i)
+                        adj_dict[i].add(j)
+                        adj_dict[j].add(i)  # ensure symmetry
                         count += 1
 
-            edge_list = []
             for i, neighbors in adj_dict.items():
                 for j in neighbors:
                     edge_list.append([i, j])
+
         else:
+            # Threshold-based connections
             for i in range(num_channels):
                 for j in range(i + 1, num_channels):
                     if corr_matrix[i, j] >= self.correlation_threshold:
                         edge_list.append([i, j])
                         edge_list.append([j, i])
-                        
-        
+
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         return edge_index
 
