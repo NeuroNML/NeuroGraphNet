@@ -7,8 +7,10 @@ from datetime import datetime
 import importlib
 
 import numpy as np
+import math
 import pandas as pd
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
@@ -17,6 +19,7 @@ from torch.utils.data import Subset, WeightedRandomSampler, DataLoader
 
 from sklearn.model_selection import StratifiedGroupKFold, train_test_split
 from sklearn.metrics import f1_score, precision_score, recall_score
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 import wandb
 from omegaconf import OmegaConf
@@ -96,7 +99,7 @@ def main():
     # 3. Compute sample weights for oversampling
     train_labels = [clips_df.iloc[i]["label"] for i in train_ids]
     class_counts = np.bincount(train_labels)
-    class_weights = 1. / class_counts # Higher weights for not frequent classes
+    class_weights = (1. / class_counts)  ** config.oversampling_power# Higher weights for not frequent classes
     sample_weights = [class_weights[label] for label in train_labels] # Assign weight to each sample based on its class
     
     # 4. Define sampler
@@ -120,10 +123,13 @@ def main():
 
     optimizer = optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     # Penalize more positive samples
-    #pos_weight = torch.tensor([class_counts[0] / class_counts[1]], dtype=torch.float32).to(device)
-    #log(f'pos_weigth:{pos_weight}')
-    #loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    loss_fn = nn.BCEWithLogitsLoss()
+    
+    imbalance_ratio = class_counts[0] / class_counts[1]
+    #adjusted_pos_weight = torch.tensor([math.sqrt(imbalance_ratio)], dtype=torch.float32).to(device)
+    adjusted_pos_weight = torch.tensor([1.5], dtype=torch.float32).to(device)
+    log(f'pos_weigth:{adjusted_pos_weight}')
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=adjusted_pos_weight)
+    #loss_fn = nn.BCEWithLogitsLoss()
 
     best_val_loss = float("inf")
     best_val_f1 = 0
@@ -147,48 +153,62 @@ def main():
 
         avg_train_loss = total_loss / len(train_loader)
 
+        
         # Validation
         model.eval()
         val_loss = 0
-        all_preds = list()
-        all_labels = list()
+        all_preds = []
+        all_labels = []
 
         with torch.no_grad():
             for batch in val_loader:
                 x, y = batch
                 x, y = x.to(device), y.to(device)
-                #out = model(x)
-                #loss = loss_fn(out, y.reshape(-1, 1))
                 logits, _ = model(x)  
                 loss = loss_fn(logits, y.reshape(-1, 1))
                 val_loss += loss.item()
-                preds = (torch.sigmoid(logits).squeeze() > 0.5).int()
+                probs = torch.sigmoid(logits).squeeze()  # [batch_size, 1] -> [batch_size]
+                preds = (probs > 0.5).int()
                 all_preds.extend(preds.cpu().numpy().ravel())
+                probs = torch.sigmoid(logits).squeeze()
                 all_labels.extend(y.int().cpu().numpy().ravel())
-              
+
         avg_val_loss = val_loss / len(val_loader)
-        val_f1 = f1_score(all_labels, all_preds, average="macro")
 
-        all_labels = np.array(all_labels).astype(int)
+        # Sweep for best threshold
         all_preds = np.array(all_preds).astype(int)
+        all_labels = np.array(all_labels).astype(int)
+        #best_thresh, _ = sweep_thresholds(all_probs, all_labels, metric="f1")
+        #best_preds = (all_probs > best_thresh).astype(int)
 
-        
-        # Monitor progress
-        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}| Val F1: {val_f1:.4f}")
-        # Print confusion matrix
-        confusion_matrix_plot(all_preds, all_labels)
-        # Compute metrics per class (0 and 1)
+        # Compute metrics
+        val_f1 = f1_score(all_labels, all_preds, average="macro")
         precision = precision_score(all_labels, all_preds, average=None)
         recall = recall_score(all_labels, all_preds, average=None)
         f1 = f1_score(all_labels, all_preds, average=None)
-        # Print only for class 1
+
+        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}")
+        #log(f"[Threshold sweep] Best threshold: {best_thresh:.2f}")
+
+        # Confusion matrix + class 1 metrics
+        confusion_matrix_plot(best_preds, all_labels)
         log(f"Class 1 — Precision: {precision[1]:.2f}, Recall: {recall[1]:.2f}, F1: {f1[1]:.2f}")
 
-        wandb.log({"epoch": epoch, "train_loss": avg_train_loss, "val_loss": avg_val_loss, "val_f1": val_f1})
+        # W&B logging
+        wandb.log({
+            "epoch": epoch,
+            "train_loss": avg_train_loss,
+            "val_loss": avg_val_loss,
+            "val_f1": val_f1,
+            "val_f1_class_1": f1[1],
+            "val_f1_class_0": f1[0]
+        })
 
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             best_state_dict = model.state_dict().copy()
+            best_preds = all_preds.copy()
+            best_labels = all_labels.copy()
             wandb.summary["best_f1_score"] = val_f1
             wandb.summary["f1_score_epoch"] = epoch
 
@@ -200,10 +220,22 @@ def main():
             if counter >= patience:
                 log("Early stopping triggered.")
                 break
+    # -------------- Sve confusion matrix --------------------#
+    cm = confusion_matrix(best_labels, best_preds)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+
+    # Create a figure for the confusion matrix
+    fig, ax = plt.subplots(figsize=(6, 6))
+    disp.plot(ax=ax, cmap="Blues", colorbar=False)
+    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}), F1-score: {best_val_f1})")
+    # Log to W&B
+    wandb.log({"best_confusion_matrix": wandb.Image(fig)})
+    plt.close(fig)
+
 
 
     # Save  embeddings
-    '''
+    
     model.load_state_dict(best_state_dict)
     model.eval()
 
@@ -226,7 +258,7 @@ def main():
     log(np.array(all_embeddings).shape)
     np.save(embeddings_dir /"embeddings.npy", np.array(all_embeddings))  # shape: [N, 19, 128]
     np.save(embeddings_dir /"labels_embeddings.npy", np.array(all_labels))          # shape: [N]
-    '''
+    
 
     log(f"Best validation F1: {best_val_f1:.4f}")
     model_path = "model.pt"

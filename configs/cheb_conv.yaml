@@ -1,14 +1,12 @@
 model:
-  type: gcn
-  name: EEGGCN
+  type: cheb_conv
+  name: ChebEEGNet
   params:
-    hidden_channels: 8
-    out_channels: 4
-    num_conv_layers: 2
-    pooling_type: max
-    dropout_prob: 0
     in_channels: 12
-
+    hidden_channels: 32
+    out_channels: 1
+    pooling_type: sum 
+    K: 1
 batch_size: 32
 learning_rate: 0.001
 weight_decay: 0

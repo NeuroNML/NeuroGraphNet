@@ -3,8 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class CNNLSTMEmb(nn.Module):
-    def __init__(self, embedding_dim=128, hidden_dim=128):
+    def __init__(self, embedding_dim=64, hidden_dim=64, bidirectional=False, dropout=0.3):
         super().__init__()
+
+        lstm_output_dim = hidden_dim * (2 if bidirectional else 1)
 
         # CNN Encoder applied to each channel
         self.conv = nn.Sequential(
@@ -21,15 +23,18 @@ class CNNLSTMEmb(nn.Module):
             hidden_size=hidden_dim,
             num_layers=1,
             batch_first=True,
-            bidirectional=False
+            bidirectional=bidirectional
         )
 
-        self.project = nn.Linear(hidden_dim, embedding_dim)
+        self.project = nn.Linear(lstm_output_dim, embedding_dim)
         self.classifier = nn.Sequential(
-            nn.Linear(embedding_dim, 64),
+            nn.Linear(embedding_dim, 32),
             nn.ReLU(),
-            nn.Linear(64, 1)
+            nn.Dropout(dropout),
+            nn.Linear(32, 1)
         )
+        self.dropout = nn.Dropout(dropout)
+        
 
     def forward(self, x):
         """
@@ -46,6 +51,7 @@ class CNNLSTMEmb(nn.Module):
         x = x.permute(0, 2, 1)  # [B*19, T', 64] for LSTM
 
         lstm_out, _ = self.lstm(x)  # [B*19, T', hidden_dim]
+        lstm_out = self.dropout(lstm_out)
         pooled = lstm_out.mean(dim=1)  # [B*19, hidden_dim]
 
         embeddings = self.project(pooled)  # [B*19, 128]

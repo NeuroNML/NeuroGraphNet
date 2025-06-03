@@ -66,18 +66,25 @@ class EEGGCN(torch.nn.Module):
         """
 
         # Input x: [total_nodes, in_channels]
+        print(f'Input to GCN: Mean - {x.mean()}, Std: - {x.std()}')
         for i in range(self.num_conv_layers - 1):
             x = self.conv_layers[i](
                 x, edge_index
             )  # Update each node’s embedding with neighbor information
-            x = F.relu(x)  # Output: [total_nodes, hidden_dim]
+            x = F.leaky_relu(x)  # Output: [total_nodes, hidden_dim]
             x = self.dropout(x)
+            print(f'Afer conv {i}')
+            print(f'mean:{x.mean()},std:{ x.std()}')
 
         # Last layer - no dropout
         x = self.conv_layers[-1](x, edge_index)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
+        print(f'Afer last conv')
+        print(f'mean:{x.mean()},std:{ x.std()}')
 
         # Aggregate node features into graph-level representation
         x = pooling(x, batch, pooling_type=self.pooling_type)
+        print(f'Afer pooling')
+        print(f'mean:{x.mean()},std:{ x.std()}')
 
         return self.linear(x)  #  graph-level embedding -> logit value

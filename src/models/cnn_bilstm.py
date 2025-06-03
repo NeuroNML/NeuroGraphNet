@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 
 
+
 class EEGConvBiLSTM(nn.Module):
 # -------------------------- MODEL -----------------------#
 
@@ -15,20 +16,28 @@ class EEGConvBiLSTM(nn.Module):
             nn.ReLU(),
             nn.MaxPool1d(2), # Time sample dim reduced by 2
             nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.MaxPool1d(2)
         )
+        
         # Output: [batch_size, 64, time_samples/4=fs*3]
         self.rnn = nn.LSTM(input_size=64, hidden_size=output_dim_lstm, batch_first=True)
         # Output: final hidden state -> [1, batch_size, 128]
         #self.fc = nn.Linear(128, 1)
 
     def forward(self, x):
+        print('Before CNN')
+        print(f'mean:{x.mean()},std:{ x.std()}')
         x = x.unsqueeze(1)            # [B, 3000] -> [B, 1, 3000]
         x = self.cnn(x)               # [B, 1, 3000] -> [B, 64, 3000/4= 750]
+        print('After CNN')
+        print(f'mean:{x.mean()},std:{ x.std()}')
         x = x.permute(0, 2, 1)        # [B, 64, T/4] -> [B, T/4, 64]
         _, (hn, _) = self.rnn(x)      # hn: [1, B, 128]
         out = hn.squeeze(0)           # [B, 128]
+        print('After LSTM')
+        print(f'mean:{out.mean()},std:{out.std()}')
         return out # No sigmoid to get prob. ->[batch_size, probs.]; already incorporated in loss
     
 
