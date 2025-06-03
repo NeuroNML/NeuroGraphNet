@@ -65,6 +65,43 @@ def spectral_entropy(psd):
 
 
 # --------------------------- Feature extractor ----------------------------------------------#
+def extract_de_features(signal, fs=250):
+    """
+    Extract Differential Entropy (DE) features per band per channel.
+
+    Returns:
+    - 1D feature vector: (n_channels × n_bands) DE features
+    """
+    features = []
+    bands = {
+        "delta": (0.5, 4),
+        "theta": (4, 8),
+        "alpha": (8, 13),
+        "beta": (13, 30),
+        "gamma": (30, 50),
+    }
+
+    for ch in range(signal.shape[1]):
+        x = signal[:, ch]
+        freqs, psd = welch(x, fs=fs, nperseg=2 * fs)
+
+        for name, (lo, hi) in bands.items():
+            idx = (freqs >= lo) & (freqs < hi)
+            band_psd = psd[idx]
+
+            # Compute band power (integral of PSD over band)
+            band_power = np.trapz(band_psd, freqs[idx])
+
+            # DE assumes Gaussian: DE = 0.5 * log(2πeσ²)
+            # σ² is approximated from band power
+            sigma_sq = band_power
+            de = 0.5 * np.log(2 * np.pi * np.e * (sigma_sq + 1e-12))
+
+            features.append(de)
+
+    return np.asarray(features, dtype=float)
+
+
 def extract_features(signal, fs=250):
     """
     Extract EEG features.
@@ -174,7 +211,7 @@ def process_session(session_df, signal_path, bp_filter, notch_filter, f_s=250):
         t0 = int(row["start_time"] * f_s)
         tf = int(row["end_time"] * f_s)
         segment = session_signal[t0:tf]
-        features = extract_features(segment)
+        features = extract_de_features(segment)
         features_list.append(features)
 
     return features_list

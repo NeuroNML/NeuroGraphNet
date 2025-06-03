@@ -101,8 +101,8 @@ if __name__ == "__main__":
     print("X_test:", X_test.shape)
 
     # ------------------------- Save arrays ---------------------------------------------#
-    np.save(DATA_ROOT / "extracted_features/X_test.npy", X_test)
-    np.save(DATA_ROOT / "extracted_features/X_train.npy", X_train)
+    np.save(DATA_ROOT / "extracted_features/X_test_DE.npy", X_test)
+    np.save(DATA_ROOT / "extracted_features/X_train_DE.npy", X_train)
     np.save(
         DATA_ROOT / "extracted_features/sample_subject_array.npy", sample_subject_list
     )
