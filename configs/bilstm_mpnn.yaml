@@ -2,26 +2,23 @@ model:
   type: encoder_gnn
   name: GNN_Encoder
   encoder:
-    type: cnn_bilstm
-    name: CNN_BiLSTM_Encoder
+    type: bilstm
+    name: EEGBiLSTM
     params:
-      cnn_dropout: 0.25
-      lstm_hidden_dim: 64
-      lstm_out_dim: 64
-      lstm_dropout: 0.25
+      hidden_size: 128
   gnn:
     type: mpnn
     name: EEGMPNN
     params:
-      in_channels: 64
-      hidden_channels: 64
+      in_channels: 128
+      hidden_channels: 128
       out_channels: 1
       num_mp_layers: 2
       pooling_message: mean
       pooling_type: mean
-      dropout_prob: 0
+      dropout_prob: 0.5
   
-batch_size: 32
+batch_size: 16
 learning_rate: 0.01
 weight_decay: 0.01
 epochs: 200

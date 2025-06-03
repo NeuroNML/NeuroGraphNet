@@ -1,0 +1,29 @@
+model:
+  type: encoder_gnn
+  name: GNN_Encoder
+  encoder:
+    type: mlp
+    name: MLPEncoder
+    params:
+      input_length: 3000
+      hidden_dim: 128
+  gnn:
+    type: dummy_gnn
+    name: DummyGNN
+    params:
+      in_channels: 128
+      hidden_channels: 64
+  
+batch_size: 16
+learning_rate: 0.01
+weight_decay: 0.01
+epochs: 200
+seed: 42
+oversampling_power: 1
+
+selected_features: False
+edge_strategy: correlation
+top_k : False
+correlation_threshold: 0.7
+low_bandpass_frequency: 0.5
+high_bandpass_frequency: 50

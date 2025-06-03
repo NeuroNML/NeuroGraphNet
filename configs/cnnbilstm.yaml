@@ -1,0 +1,18 @@
+model:
+  type: cnnbilstm
+  name: EEGConvBiLSTM
+  params:
+    in_channels: 19             
+
+batch_size: 32
+learning_rate: 0.001
+weight_decay: 0
+epochs: 200
+seed: 42
+oversampling_power: 1
+
+
+low_bandpass_frequency: 0.5
+high_bandpass_frequency: 50
+apply_rereferencing: False
+apply_normalization: True

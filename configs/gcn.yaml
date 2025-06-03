@@ -2,12 +2,12 @@ model:
   type: gcn
   name: EEGGCN
   params:
-    hidden_channels: 64
+    hidden_channels: 128
     out_channels: 64
-    num_conv_layers: 3
+    num_conv_layers: 2
     pooling_type: mean
     dropout_prob: 0.5
-    in_channels: 3000
+    in_channels: 128
 
 batch_size: 32
 learning_rate: 0.001
@@ -16,9 +16,10 @@ epochs: 200
 seed: 42
 oversampling_power: 1
 
-selected_features: False
-edge_strategy: spatial
+embeddings: True
+selected_features:  False
+edge_strategy: correlation
 top_k :  False
-correlation_threshold: False
+correlation_threshold: 0.7
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50

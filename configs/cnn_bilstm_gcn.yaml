@@ -3,23 +3,19 @@ model:
   name: GNN_Encoder
   encoder:
     type: cnn_bilstm
-    name: CNN_BiLSTM_Encoder
+    name: EEGConvBiLSTM
     params:
-      cnn_dropout: 0.25
-      lstm_hidden_dim: 64
-      lstm_out_dim: 64
-      lstm_dropout: 0.25
+      output_dim_lstm: 64
   gnn:
-    type: mpnn
-    name: EEGMPNN
+    type: gcn
+    name: EEGGCN
     params:
-      in_channels: 64
       hidden_channels: 64
-      out_channels: 1
-      num_mp_layers: 2
-      pooling_message: mean
+      out_channels: 32
+      num_conv_layers: 2
       pooling_type: mean
-      dropout_prob: 0
+      dropout_prob: 0.5
+      in_channels: 64
   
 batch_size: 32
 learning_rate: 0.01
@@ -28,6 +24,7 @@ epochs: 200
 seed: 42
 oversampling_power: 1
 
+embeddings: False
 selected_features: False
 edge_strategy: correlation
 top_k : False
