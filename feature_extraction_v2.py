@@ -16,7 +16,7 @@ from scipy.stats import skew, kurtosis
 # If not, you might consider from scipy.stats import entropy as spectral_entropy
 # and ensure psd is normalized before passing.
 from src.utils.signal import spectral_entropy
-from src.utils.dataset import ensure_eeg_multiindex
+from src.utils.index import ensure_eeg_multiindex
 
 # --- Configuration & Global Constants ---
 # Define the number of features globally for consistency

@@ -56,6 +56,7 @@ class GraphEEGDataset(Dataset):
         if use_embeddings and embedding_file_path and labels_for_embedding_file_path:
             self.mode = "embedding"
             print("🚀 Initializing GraphEEGDataset in EMBEDDING mode.")
+            self.embedding_file_path = Path(embedding_file_path)
             self.embedding_data = np.load(embedding_file_path)
             self.embedding_labels = np.load(labels_for_embedding_file_path)
             if len(self.embedding_data) != len(self.embedding_labels):

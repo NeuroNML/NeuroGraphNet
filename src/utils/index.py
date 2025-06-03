@@ -4,9 +4,17 @@ from typing import Optional
 
 def ensure_eeg_multiindex(df: pd.DataFrame, id_col_name: Optional[str] = 'id') -> pd.DataFrame:
     """
-    Ensures the DataFrame has a MultiIndex with levels ['patient', 'session', 'clip', 'segment'].
+    Ensures the DataFrame has a MultiIndex with levels ['patient', 'session', 'segment'].
     ID format expected: <patient_id>_s<session_no>_t<clip_no>_<segment_no>
+    Sessions and clips are combined into a single session identifier (session_clip).
     Uses ClipsDF constants for index level names.
+    
+    Expected output format:
+    ======= ======= =======  ===== ========== ======== ==== ============= ============
+    Multiindex               Columns
+    -----------------------  ---------------------------------------------------------
+    patient session segment  label start_time end_time date sampling_rate signals_path
+    ======= ======= =======  ===== ========== ======== ==== ============= ============
     """
     df_out = df.copy()
     desired_names = [ClipsDF.patient, ClipsDF.session, ClipsDF.segment]
@@ -35,7 +43,7 @@ def ensure_eeg_multiindex(df: pd.DataFrame, id_col_name: Optional[str] = 'id') -
     for record_id_val in id_series:
         record_id_str = str(record_id_val)
         parts = record_id_str.split('_')
-        if len(parts) != 3: # e.g. P001_s1_t1_0
+        if len(parts) != 4: # e.g. P001_s1_t1_0
             # Try common alternative P001_s01_clip1_seg0
             parts_alt_clip = record_id_str.replace('_clip', '_c').replace('_seg','_s').split('_')
             if len(parts_alt_clip) == 4 and parts_alt_clip[2].startswith('c') and parts_alt_clip[3].startswith('s'):
@@ -44,15 +52,35 @@ def ensure_eeg_multiindex(df: pd.DataFrame, id_col_name: Optional[str] = 'id') -
                  raise ValueError(f"ID '{record_id_str}' malformed. Expected 4 parts (e.g., pat_sS_tT_Seg or pat_sS_cC_sS), got {len(parts)}.")
         try:
             patient = parts[0]
-            session = int(parts[1][1:]) # Remove 's'
+            session_num = int(parts[1][1:]) # Remove 's'
             clip_val_str = parts[2]
             clip_val = int(clip_val_str[1:]) if clip_val_str.startswith(('t', 'c')) else int(clip_val_str) # Remove 't' or 'c'
             
+            # Combine session and clip into a single session identifier
+            # Format: "s{session_num}_t{clip_val}" (e.g., "s1_t1", "s2_t3")
+            combined_session = f"s{session_num}_t{clip_val}"
+            
             segment_val_str = parts[3]
             segment_val = int(segment_val_str[1:]) if segment_val_str.startswith('s') else int(segment_val_str) # Remove 's' if present
-            parsed_ids.append((patient, session, clip_val, segment_val))
+            parsed_ids.append((patient, combined_session, segment_val))
         except (ValueError, IndexError) as e:
             raise ValueError(f"Error parsing components of ID '{record_id_str}': {e}") from e
     
     if not parsed_ids: # Should not happen if id_series was not empty
-        df
+        raise ValueError("No valid IDs could be parsed from the provided data.")
+    
+    # Create the MultiIndex from parsed components
+    patients, sessions, segments = zip(*parsed_ids)
+    
+    # Drop id column if it exists to avoid duplication
+    if id_col_name and id_col_name in df_out.columns:
+        df_out = df_out.drop(columns=[id_col_name])
+    
+    # Create the new MultiIndex
+    new_index = pd.MultiIndex.from_tuples(
+        parsed_ids,
+        names=desired_names
+    )
+    
+    df_out.index = new_index
+    return df_out

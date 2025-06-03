@@ -26,7 +26,7 @@ from tqdm import tqdm
 from scipy.signal import welch, butter, iirnotch, sosfiltfilt, tf2sos
 
 from src.utils.signal import spectral_entropy
-from src.utils.dataset import ensure_eeg_multiindex
+from src.utils.index import ensure_eeg_multiindex
 
 
 def extract_seizure_features(channel_signal: np.ndarray, fs: int = 250) -> List[float]:

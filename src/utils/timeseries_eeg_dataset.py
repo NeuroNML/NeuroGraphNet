@@ -1,4 +1,5 @@
 import os
+import os.path as osp
 from pathlib import Path
 from typing import Tuple, List, Optional
 
@@ -30,11 +31,21 @@ class TimeseriesEEGDataset(Dataset):
         notch_freq_hz: Optional[float] = 60.0,
         notch_q_factor: float = 30.0,
         sampling_rate: Optional[int] = None, # Required if mode="signal". Can be read from clips_df too.
+        # Caching parameters
+        root: Optional[str] = None, # Root directory for cached processed data
+        force_reprocess: bool = False, # Force reprocessing and overwrite cached data
+        prefetch_data: bool = False, # Load all data into memory
     ):
         print(f"🚀 Initializing EEGTimeSeriesDataset in {mode.upper()} mode.")
         self.clips_df = clips_df
         self.signal_folder = Path(signal_folder)
         self.mode = mode.lower()
+        
+        # Caching setup
+        self.root = Path(root) if root else None
+        self.force_reprocess = force_reprocess
+        self.prefetch_data = prefetch_data
+        self._data_list = None  # For prefetching
 
         self.apply_rereferencing = apply_rereferencing
         self.apply_normalization = apply_normalization
@@ -48,7 +59,10 @@ class TimeseriesEEGDataset(Dataset):
             "F7", "F8", "T3", "T4", "T5", "T6", "FZ", "CZ", "PZ"
         ]
         self.n_channels = len(self.channels)
+        
+        # Initialize samples list and processed items count
         self.samples = []
+        self._processed_items_count = 0
 
         if self.mode == "signal":
             if sampling_rate is None:
@@ -65,7 +79,7 @@ class TimeseriesEEGDataset(Dataset):
             if segment_length_timesteps is None:
                  # Try to derive from clips_df if start/end times are consistent
                 if ClipsDF.start_time in clips_df.columns and ClipsDF.end_time in clips_df.columns:
-                    durations_ts = np.round((clips_df[ClipsDF.end_time] - clips_df[ClipsDF.start_time]) * self.sampling_rate).unique()
+                    durations_ts = np.unique(np.round((clips_df[ClipsDF.end_time] - clips_df[ClipsDF.start_time]) * self.sampling_rate))
                     if len(durations_ts) == 1:
                         self.segment_length_timesteps = int(durations_ts[0])
                         print(f"   - Derived segment length: {self.segment_length_timesteps} timesteps.")
@@ -85,7 +99,18 @@ class TimeseriesEEGDataset(Dataset):
                     self.notch_filter_coeffs = signal.tf2sos(*notch_coeffs_ba)
                 else:
                     self.notch_filter_coeffs = None
-            self._process_sessions()
+            
+            # Set up caching prefix and check for existing cache
+            self._current_file_prefix = self._determine_prefix_for_mode()
+            
+            if self.root and self._should_use_cache():
+                print(f"   ✅ Using existing cached data from {self.processed_dir}")
+                self._processed_items_count = self._count_existing_processed_files()
+            else:
+                if self.root and self.force_reprocess:
+                    print(f"   🔄 Force reprocessing enabled, clearing existing cache...")
+                    self._clear_processed_files()
+                self._process_sessions()
 
         elif self.mode == "feature":
             if feature_file_path is None:
@@ -97,7 +122,18 @@ class TimeseriesEEGDataset(Dataset):
                        f"differs from clips_df length ({len(self.clips_df)}). Label alignment might be incorrect.")
             if ClipsDF.label not in self.clips_df.columns:
                 raise ValueError(f"Column '{ClipsDF.label}' for labels not found in clips_df for feature mode.")
-            self._process_features()
+            
+            # Set up caching prefix and check for existing cache
+            self._current_file_prefix = self._determine_prefix_for_mode()
+            
+            if self.root and self._should_use_cache():
+                print(f"   ✅ Using existing cached data from {self.processed_dir}")
+                self._processed_items_count = self._count_existing_processed_files()
+            else:
+                if self.root and self.force_reprocess:
+                    print(f"   🔄 Force reprocessing enabled, clearing existing cache...")
+                    self._clear_processed_files()
+                self._process_features()
 
         elif self.mode == "embedding":
             if embedding_file_path is None or labels_for_embedding_file_path is None:
@@ -108,11 +144,27 @@ class TimeseriesEEGDataset(Dataset):
                 raise ValueError("Mismatch between length of embedding data and embedding labels.")
             if self.embedding_data.ndim !=3 or self.embedding_data.shape[1] != self.n_channels: # Expect [N, C, D_embed]
                  raise ValueError(f"Embedding data shape unexpected: {self.embedding_data.shape}. Expected [N, {self.n_channels}, Dimensions].")
-            self._process_embeddings()
+            
+            # Set up caching prefix and check for existing cache
+            self._current_file_prefix = self._determine_prefix_for_mode()
+            
+            if self.root and self._should_use_cache():
+                print(f"   ✅ Using existing cached data from {self.processed_dir}")
+                self._processed_items_count = self._count_existing_processed_files()
+            else:
+                if self.root and self.force_reprocess:
+                    print(f"   🔄 Force reprocessing enabled, clearing existing cache...")
+                    self._clear_processed_files()
+                self._process_embeddings()
         else:
             raise ValueError(f"Unknown mode: {self.mode}. Choose 'signal', 'feature', or 'embedding'.")
         
-        print(f"🏁 EEGTimeSeriesDataset initialization complete. Loaded {len(self.samples)} samples.")
+        # Handle prefetching if requested
+        if self.prefetch_data and self.root and self._processed_items_count > 0:
+            self._prefetch_data()
+        
+        final_count = self._processed_items_count if self.root and self._processed_items_count > 0 else len(self.samples)
+        print(f"🏁 EEGTimeSeriesDataset initialization complete. Loaded {final_count} samples.")
 
     def _filter_signal(self, eeg_data_time_channels: np.ndarray) -> np.ndarray:
         # Input: [Time, Channels]
@@ -152,7 +204,13 @@ class TimeseriesEEGDataset(Dataset):
     def _process_embeddings(self):
         # self.embedding_data is [N, C, D_embed]
         # self.embedding_labels is [N]
+        print(f"   - Processing {len(self.embedding_data)} embeddings...")
+        log_interval = max(1, len(self.embedding_data) // 10)
+        
         for i in range(len(self.embedding_data)):
+            if (i + 1) % log_interval == 0 or i == len(self.embedding_data) - 1:
+                print(f"     - Processing embedding {i + 1}/{len(self.embedding_data)}...")
+            
             # segment_embedding is [C, D_embed]
             segment_embedding = self.embedding_data[i].copy()
             
@@ -168,11 +226,25 @@ class TimeseriesEEGDataset(Dataset):
             x = torch.tensor(segment_embedding.flatten(), dtype=torch.float32) # Flattened: [C * D_embed]
             # If a model expects [C, D_embed], use:
             # x = torch.tensor(segment_embedding, dtype=torch.float32)
-            self.samples.append((x, y))
+            
+            if self.root:
+                self._save_processed_item(x, y, i)
+                self._processed_items_count += 1
+            else:
+                self.samples.append((x, y))
+        
+        print(f"   ✅ Processed {len(self.embedding_data)} embeddings.")
 
     def _process_features(self):
         # self.feature_data is [N, C*F_feat_per_channel] or [N, C, F_feat_per_channel]
+        print(f"   - Processing {len(self.feature_data)} feature sets...")
+        log_interval = max(1, len(self.feature_data) // 10)
+        processed_count = 0
+        
         for index, features_for_sample_raw in enumerate(self.feature_data):
+            if (index + 1) % log_interval == 0 or index == len(self.feature_data) - 1:
+                print(f"     - Processing feature set {index + 1}/{len(self.feature_data)}...")
+            
             try:
                 # Reshape to [Channels, Features_per_channel]
                 if features_for_sample_raw.ndim == 1: # [C*F]
@@ -202,7 +274,16 @@ class TimeseriesEEGDataset(Dataset):
             y = torch.tensor([label_val], dtype=torch.float)
             # Output x: Flattened [C * F_feat_per_channel]
             x = torch.tensor(segment_features.flatten(), dtype=torch.float32)
-            self.samples.append((x, y))
+            
+            if self.root:
+                self._save_processed_item(x, y, processed_count)
+                self._processed_items_count += 1
+            else:
+                self.samples.append((x, y))
+            
+            processed_count += 1
+        
+        print(f"   ✅ Processed {processed_count} feature sets.")
 
     def _process_sessions(self):
         # Iterate through clips_df, load signal for each segment, process, and store
@@ -213,10 +294,11 @@ class TimeseriesEEGDataset(Dataset):
         
         print(f"   - Processing {len(self.clips_df)} segments from clips_df row by row...")
         log_interval = max(1, len(self.clips_df) // 10)
+        processed_count = 0
 
-        for idx, row_data in self.clips_df.iterrows():
-            if (idx + 1) % log_interval == 0 or idx == len(self.clips_df) -1 :
-                print(f"     - Processing clip/segment {idx + 1}/{len(self.clips_df)}...")
+        for row_num, (idx, row_data) in enumerate(self.clips_df.iterrows()):
+            if (row_num + 1) % log_interval == 0 or row_num == len(self.clips_df) - 1:
+                print(f"     - Processing clip/segment {row_num + 1}/{len(self.clips_df)}...")
 
             signal_file_name = row_data[ClipsDF.signals_path]
             full_signal_path = self.signal_folder / signal_file_name
@@ -272,14 +354,142 @@ class TimeseriesEEGDataset(Dataset):
                 
                 x = torch.tensor(x_tensor_data, dtype=torch.float32)
                 y = torch.tensor([row_data[ClipsDF.label]], dtype=torch.float)
-                self.samples.append((x, y))
+                
+                if self.root:
+                    self._save_processed_item(x, y, processed_count)
+                    self._processed_items_count += 1
+                else:
+                    self.samples.append((x, y))
+                
+                processed_count += 1
 
             except Exception as e:
                 print(f"     ⚠️ Error processing segment {idx} from {full_signal_path}: {e}. Skipping.")
                 continue
+        
+        print(f"   ✅ Processed {processed_count} segments from raw signals.")
     
     def __len__(self):
+        if self.root and self._processed_items_count > 0:
+            return self._processed_items_count
         return len(self.samples)
 
     def __getitem__(self, idx):
+        if self.root and self._processed_items_count > 0:
+            return self._get_cached_item(idx)
         return self.samples[idx]
+    
+    def _determine_prefix_for_mode(self) -> str:
+        """Determine the file prefix based on the current mode."""
+        if self.mode == "embedding":
+            return "ts_embed_"
+        elif self.mode == "feature":
+            return "ts_feat_"
+        return "ts_signal_"  # Default for signal mode
+    
+    @property
+    def processed_dir(self) -> str:
+        """Directory where processed data will be cached."""
+        if not self.root:
+            raise ValueError("Root directory not set for caching")
+        return osp.join(str(self.root), "processed")
+    
+    def _get_cached_item(self, idx: int):
+        """Load a cached item from disk."""
+        if not (0 <= idx < self._processed_items_count):
+            raise IndexError(f"Index {idx} out of range [0, {self._processed_items_count})")
+        
+        if hasattr(self, '_data_list') and self._data_list is not None:
+            return self._data_list[idx]
+        
+        file_path = osp.join(self.processed_dir, f'{self._current_file_prefix}{idx}.pt')
+        try:
+            data = torch.load(file_path)
+            return data
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Cached file not found: {file_path}")
+        except Exception as e:
+            raise RuntimeError(f"Error loading cached file {file_path}: {e}")
+    
+    def _save_processed_item(self, x: torch.Tensor, y: torch.Tensor, idx: int):
+        """Save a processed item to disk."""
+        if not self.root:
+            return  # No caching if root not set
+        
+        os.makedirs(self.processed_dir, exist_ok=True)
+        file_path = osp.join(self.processed_dir, f'{self._current_file_prefix}{idx}.pt')
+        torch.save((x, y), file_path)
+    
+    def _count_existing_processed_files(self) -> int:
+        """Count existing processed files with the current prefix."""
+        if not self.root or not osp.exists(self.processed_dir):
+            return 0
+        
+        count = 0
+        while True:
+            file_path = osp.join(self.processed_dir, f'{self._current_file_prefix}{count}.pt')
+            if osp.exists(file_path):
+                count += 1
+            else:
+                break
+        return count
+    
+    def _clear_processed_files(self):
+        """Clear existing processed files with the current prefix."""
+        if not self.root or not osp.exists(self.processed_dir):
+            return
+        
+        count = 0
+        while True:
+            file_path = osp.join(self.processed_dir, f'{self._current_file_prefix}{count}.pt')
+            if osp.exists(file_path):
+                os.remove(file_path)
+                count += 1
+            else:
+                break
+        print(f"   - Cleared {count} existing cached files with prefix '{self._current_file_prefix}'")
+    
+    def _should_use_cache(self) -> bool:
+        """Check if we should use cached data instead of processing."""
+        if not self.root or self.force_reprocess:
+            return False
+        
+        existing_count = self._count_existing_processed_files()
+        expected_count = len(self.clips_df) if self.mode == "signal" else (
+            len(self.feature_data) if hasattr(self, 'feature_data') else
+            len(self.embedding_data) if hasattr(self, 'embedding_data') else 0
+        )
+        
+        return existing_count == expected_count and existing_count > 0
+    
+    def _prefetch_data(self):
+        """Load all cached data into memory."""
+        if not self.root or self._processed_items_count == 0:
+            print("   ⚠️ No cached data to prefetch")
+            return
+        
+        self._data_list = [None] * self._processed_items_count
+        print(f"🚀 Starting prefetch of {self._processed_items_count} items for {self.mode} mode...")
+        
+        prefetched_count = 0
+        log_interval = max(1, self._processed_items_count // 10)
+        
+        for i in range(self._processed_items_count):
+            try:
+                file_path = osp.join(self.processed_dir, f'{self._current_file_prefix}{i}.pt')
+                self._data_list[i] = torch.load(file_path)
+                prefetched_count += 1
+                
+                if (i + 1) % log_interval == 0 or i == self._processed_items_count - 1:
+                    print(f"   - Prefetched {i + 1}/{self._processed_items_count} items")
+            except Exception as e:
+                print(f"   ⚠️ Error prefetching item {i}: {e}")
+                self._data_list[i] = None
+        
+        # Filter out failed loads
+        loaded_items = [item for item in self._data_list if item is not None]
+        if len(loaded_items) != prefetched_count:
+            print(f"   ⚠️ Some files failed to load. Expected {prefetched_count}, got {len(loaded_items)}")
+        
+        self._data_list = loaded_items
+        print(f"🏁 Prefetching complete. Loaded {len(self._data_list)} items into memory.")
