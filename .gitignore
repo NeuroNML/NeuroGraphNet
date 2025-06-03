@@ -14,3 +14,8 @@ data/graph_dataset_*/
 data/extracted_features/
 data/labels/
 .vscode/
+
+data/timeseries_dataset_test_features
+data/timeseries_dataset_test_signal
+data/timeseries_dataset_train_features
+data/timeseries_dataset_train_signal
