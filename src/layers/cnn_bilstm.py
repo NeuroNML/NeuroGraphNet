@@ -41,7 +41,6 @@ class EEGConvBiLSTM(nn.Module):
         return out # No sigmoid to get prob. ->[batch_size, probs.]; already incorporated in loss
     
 
-'''
 class EEGCNN(nn.Module):
     def __init__(self, dropout=0.25):
         super().__init__()
@@ -127,5 +126,3 @@ class CNN_BiLSTM_Encoder(nn.Module):
         embedding = self.lstm_path(lstm_input)
 
         return embedding
-    
-    '''
