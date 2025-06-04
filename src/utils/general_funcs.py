@@ -1,7 +1,29 @@
 from datetime import datetime
 import numpy as np
+from sklearn.metrics import f1_score, precision_score, recall_score
 
 
+def log(msg):
+    """Log message with timestamp to monitor training."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+    
+def labels_stats(y, trains_ids, val_ids):
+    # Get train/val labels
+    y_train, y_val = y[trains_ids], y[val_ids]
+
+    # Compute class counts
+    train_counts = np.bincount(y_train)
+    val_counts = np.bincount(y_val)
+
+    # Handle case where one class might be missing (e.g., only 0s or 1s in val set)
+    train_0 = train_counts[0] 
+    train_1 = train_counts[1] 
+    val_0 = val_counts[0] 
+    val_1 = val_counts[1] 
+
+    # Log results
+    log(f"Train labels: 0 -> {train_0}, 1 -> {train_1}")
+    log(f"Val labels:   0 -> {val_0}, 1 -> {val_1}")
 
 def confusion_matrix_plot(all_preds, all_labels):
     
@@ -19,9 +41,6 @@ def confusion_matrix_plot(all_preds, all_labels):
 
    
 
-def log(msg):
-    """Log message with timestamp to monitor training."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 def generate_run_name(config):
@@ -60,3 +79,24 @@ def generate_run_name(config):
             name.append(f"{key}_{value}")
 
     return "_".join(name)
+
+
+def sweep_thresholds(probs, true_labels, metric="f1"):
+    best_score = 0
+    best_thresh = 0.5
+    for threshold in np.arange(0.1, 0.91, 0.05):
+        preds = (probs > threshold).astype(int)
+        if metric == "f1":
+            score = f1_score(true_labels, preds)
+        elif metric == "recall":
+            score = recall_score(true_labels, preds)
+        elif metric == "precision":
+            score = precision_score(true_labels, preds)
+        else:
+            raise ValueError("Unsupported metric")
+        if score > best_score:
+            best_score = score
+            best_thresh = threshold
+    return best_thresh, best_score
+
+

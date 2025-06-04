@@ -204,7 +204,7 @@ class GraphEEGDataset(Dataset):
         """
         Processes extracted features from samples into PyTorch Geometric Data objects.
         """
-        extracted_features = np.load(self.extracted_features_dir / "X_train.npy")
+        extracted_features = np.load(self.extracted_features_dir / "X_train_DE.npy")
         idx = 0
         for index, segment_signal in enumerate(
             extracted_features
@@ -334,7 +334,15 @@ class GraphEEGDataset(Dataset):
         Returns:
             torch.Tensor: Edge index tensor of shape [2, num_edges]
         """
-        if self.edge_strategy == "spatial":
+        
+        if self.top_k == 19: # Fully connected
+            edge_list = []
+            for i in range(self.num_channels):
+                for j in range(self.num_channels):
+                    if i != j:
+                     edge_list.append([i, j])
+            return  torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        elif self.edge_strategy == "spatial":
             return self._create_spatial_edges()
         elif self.edge_strategy == "correlation":
             return self._create_correlation_edges(signal_data)
@@ -402,10 +410,13 @@ class GraphEEGDataset(Dataset):
             torch.Tensor: Edge index tensor (2, num_edges)
         """
         corr_matrix = np.abs(np.corrcoef(signal_data))
+
+        # Eliminate samples with NaN in corr matrix (0 signal)
         if np.isnan(corr_matrix).any():
-            raise ValueError("Correlation matrix contains NaNs.")
+             return torch.empty(0)
         if np.isinf(corr_matrix).any():
-            raise ValueError("Correlation matrix contains infinite values.")
+             return  torch.empty(0)
+            
 
         num_channels = len(self.channels)
         edge_list = []
