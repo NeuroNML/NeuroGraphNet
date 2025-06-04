@@ -5,11 +5,12 @@ from typing import Optional, List, Tuple
 
 class FeatureAttention(nn.Module):
     """Attention mechanism for feature importance weighting"""
-    def __init__(self, input_dim: int, attention_dim: Optional[int] = None):
+    def __init__(self, input_dim: int, attention_dim: Optional[int] = None, scale_factor: float = 0.1):
         super().__init__()
         if attention_dim is None:
             attention_dim = input_dim // 2
         
+        self.scale_factor = scale_factor
         self.attention = nn.Sequential(
             nn.Linear(input_dim, attention_dim),
             nn.Tanh(),
@@ -18,8 +19,8 @@ class FeatureAttention(nn.Module):
     
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # x shape: (batch_size, input_dim)
-        attention_weights = F.softmax(self.attention(x), dim=1)  # (batch_size, 1)
-        weighted_features = x * attention_weights  # (batch_size, input_dim)
+        attention_weights = torch.sigmoid(self.attention(x)) * self.scale_factor  # (batch_size, 1)
+        weighted_features = x * (1.0 + attention_weights)  # Additive attention instead of multiplicative
         return weighted_features, attention_weights
 
 class FeatureBlock(nn.Module):
@@ -51,12 +52,13 @@ class FeatureNet(nn.Module):
         hidden_dims: List[int] = [512, 256, 128],  # Hidden layer dimensions
         dropout: float = 0.3,
         attention_dim: Optional[int] = None,
-        num_classes: int = 1
+        num_classes: int = 1,
+        attention_scale: float = 0.1  # New parameter for attention scaling
     ):
         super().__init__()
         
         # Feature attention layer
-        self.feature_attention = FeatureAttention(input_dim, attention_dim)
+        self.feature_attention = FeatureAttention(input_dim, attention_dim, scale_factor=attention_scale)
         
         # Feature processing blocks
         self.feature_blocks = nn.ModuleList()
@@ -65,11 +67,8 @@ class FeatureNet(nn.Module):
             self.feature_blocks.append(FeatureBlock(prev_dim, hidden_dim, dropout))
             prev_dim = hidden_dim
         
-        # Final classification layer
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dims[-1], num_classes),
-            nn.BatchNorm1d(num_classes)
-        )
+        # Final classification layer - removed BatchNorm
+        self.classifier = nn.Linear(hidden_dims[-1], num_classes)
         
         # Initialize weights
         self._init_weights()
@@ -107,16 +106,13 @@ class FeatureNet(nn.Module):
         
         # Final classification
         logits = self.classifier(features)
-        
         return logits, attention_weights
     
     def get_feature_importance(self, x: torch.Tensor) -> torch.Tensor:
         """
         Get the attention weights for feature importance analysis
-        
         Args:
             x: Input tensor of shape (batch_size, input_dim)
-            
         Returns:
             Feature importance weights of shape (batch_size, 1)
         """

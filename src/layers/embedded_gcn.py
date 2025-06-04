@@ -1,5 +1,5 @@
 import torch
-import torch.nn as nn, BatchNorm1d
+import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, global_mean_pool
 from torch_geometric.nn import Linear
