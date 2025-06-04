@@ -114,6 +114,7 @@ def main():
 
     # Check the length of the dataset
     log(f"Length of train_dataset: {len(dataset)}")
+    log(f' Eliminated IDs:{dataset.ids_to_eliminate}')
 
     # Eliminate ids that did not have electrodes above correlation threshols
     clips_tr = clips_tr[~clips_tr.index.isin(dataset.ids_to_eliminate)].reset_index(drop=True)
@@ -311,7 +312,7 @@ def main():
     log(f"Best validation F1: {best_val_f1:.4f} at epoch {best_val_f1_epoch}")
 
     # -------------- Sve confusion matrix --------------------#
-    cm = confusion_matrix(best_labels, best_preds)
+    cm = confusion_matrix(best_labels, best_preds, normalize="true")
     disp = ConfusionMatrixDisplay(confusion_matrix=cm)
 
     # Create a figure for the confusion matrix

@@ -59,7 +59,6 @@ def main():
 
 
     dataset = EEGTimeSeriesDataset(
-        root="data/timeseries_dataset_train",
         clips=clips_df,
         signal_folder="data/train",
         extracted_features_dir=extracted_features_dir,

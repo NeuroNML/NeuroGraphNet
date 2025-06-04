@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, global_add_pool, BatchNorm
 
 class EEGGraphConvNetMini(nn.Module):
-    def __init__(self, in_channels=6, hidden1=16, hidden2=32, mlp_dims=(32, 16, 2)):
+    def __init__(self, in_channels=12, hidden1=16, hidden2=32, mlp_dims=(32, 16, 1)):
         super(EEGGraphConvNetMini, self).__init__()
 
         # GCN layers

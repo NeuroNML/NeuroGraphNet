@@ -14,7 +14,6 @@ from src.utils.preprocessing_funcs import time_filtering
 class EEGTimeSeriesDataset(Dataset):
     def __init__(
         self,
-        root,
         clips: pd.DataFrame,
         embeddings_dir:str,
         embeddings_train: bool,
@@ -28,7 +27,7 @@ class EEGTimeSeriesDataset(Dataset):
         bandpass_frequencies: Tuple[float, float] = (0.5, 50),
         sampling_rate: int = 250,
     ):
-        self.root = root
+       
         self.clips = clips
         self.signal_folder = signal_folder
         self.embeddings_dir = embeddings_dir
@@ -131,6 +130,7 @@ class EEGTimeSeriesDataset(Dataset):
 
 
     def _process_sessions(self):
+        
         sessions = list(self.clips.groupby(["patient", "session"]))
         for (_, _), session_df in sessions:
             session_signal = pd.read_parquet(
