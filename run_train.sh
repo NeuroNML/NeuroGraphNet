@@ -16,4 +16,4 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate nml_env
 
 # Run and redirect output manually
-python scripts/train_graph.py --config "$CONFIG" > logs/${LOG_NAME}.out 2> logs/${LOG_NAME}.err
+python scripts/train_graph.py --config "$CONFIG" > logs/${LOG_NAME}.out 2>&1

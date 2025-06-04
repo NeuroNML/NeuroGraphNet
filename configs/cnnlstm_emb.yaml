@@ -2,17 +2,21 @@ model:
   type: cnnlstm_embeddings
   name: CNNLSTMEmb
   params:
-    embedding_dim: 128             
+    hidden_dim: 128
+    embedding_dim: 64    
+    bidirectional: True
+  
 
 batch_size: 32
-learning_rate: 0.001
-weight_decay: 0
+learning_rate: 0.0005
+weight_decay: 1e-4
 epochs: 200
 seed: 42
-oversampling_power: 1
+oversampling_power: 0.5
 
+embeddings: False
 selected_features: False
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50
-apply_rereferencing: False
+apply_rereferencing: True
 apply_normalization: True

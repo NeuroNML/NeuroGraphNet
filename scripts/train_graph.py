@@ -12,6 +12,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 import wandb
 from omegaconf import OmegaConf
@@ -19,6 +20,8 @@ from omegaconf import OmegaConf
 
 from sklearn.model_selection import train_test_split, GroupKFold
 from sklearn.metrics import f1_score, recall_score, precision_score
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
 
 import torch
 import torch.nn as nn
@@ -116,15 +119,16 @@ def main():
     clips_tr = clips_tr[~clips_tr.index.isin(dataset.ids_to_eliminate)].reset_index(drop=True)
 
     # --------------- Split dataset intro train/val --------------- #
-    
+    '''
     y = clips_tr.label.values
     train_ids, val_ids = train_test_split(
     np.arange(len(y)),
     test_size=0.2,
     random_state=config.seed
 )
-
     '''
+
+    
     cv = GroupKFold(n_splits=5, shuffle=True, random_state=config.seed)
     groups = clips_tr.patient.values
     y = clips_tr["label"].values
@@ -132,7 +136,10 @@ def main():
     train_ids, val_ids = next(cv.split(X, y, groups=groups))  # Just select one split
     print('Labels before Kfold', flush=True)
     print(y,flush=True)
-    '''
+
+    # Print stats for class 0 and 1
+    labels_stats(y, trains_ids=train_ids,val_ids= val_ids)
+    
    
 
 
@@ -145,7 +152,7 @@ def main():
     # 3. Compute sample weights for oversampling
     train_labels = [clips_tr.iloc[i]["label"] for i in train_ids]
     class_counts = np.bincount(train_labels)
-    class_weights = 1. / class_counts # Higher weights for not frequent classes
+    class_weights = (1. / class_counts) ** config.oversampling_power# Higher weights for not frequent classes
     sample_weights = [class_weights[label] for label in train_labels] # Assign weight to each sample based on its class
 
     # 4. Define sampler
@@ -168,7 +175,17 @@ def main():
     optimizer = optim.Adam(
         model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
     )  # Adam with weight decay
-    loss_fn = nn.BCEWithLogitsLoss()  # Applies sigmoid implicitly
+
+    '''
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, verbose=True
+    )
+    '''
+
+    #loss_fn = nn.BCEWithLogitsLoss()  # Applies sigmoid implicitly
+    adjusted_pos_weight = torch.tensor([1.5], dtype=torch.float32).to(device)
+    log(f'pos_weigth:{adjusted_pos_weight}')
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=adjusted_pos_weight)
 
     # -------- Training loop -------- #
     best_val_loss = float("inf")
@@ -177,6 +194,7 @@ def main():
     patience = 10
     counter = 0
     log("Training started")
+    
 
     for epoch in range(1, config.epochs + 1):
         # ------- Training ------- #
@@ -213,6 +231,7 @@ def main():
                 )  # batch.batch: [num_nodes_batch] = 19*batch_size -> tells the model which graph each node belongs to
                 loss = loss_fn(out, batch.y.reshape(-1, 1))
                 val_loss += loss.item()
+                
 
                 probs = torch.sigmoid(out).squeeze()  # [batch_size, 1] -> [batch_size]
                 preds = (probs > 0.5).int()
@@ -230,6 +249,7 @@ def main():
 
 
         avg_val_loss = val_loss / len(val_loader)  # Average loss per batch
+        #scheduler.step(avg_val_loss)
         val_f1 = f1_score(all_labels, all_preds, average="macro")
 
         all_labels = np.array(all_labels).astype(int)
@@ -263,12 +283,16 @@ def main():
                 "train_loss": avg_train_loss,
                 "val_loss": avg_val_loss,
                 "val_f1": val_f1,
+                "val_f1_class_1":f1[1],
+                 "val_f1_class_0":f1[0]
             }
         )
         # ------- Record best F1 score ------- #
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             best_val_f1_epoch = epoch
+            best_preds = all_preds.copy()
+            best_labels = all_labels.copy()
             # Load best stats in wandb
             wandb.summary["best_f1_score"] = val_f1
             wandb.summary["f1_score_epoch"] = epoch
@@ -285,6 +309,18 @@ def main():
                 break
 
     log(f"Best validation F1: {best_val_f1:.4f} at epoch {best_val_f1_epoch}")
+
+    # -------------- Sve confusion matrix --------------------#
+    cm = confusion_matrix(best_labels, best_preds)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+
+    # Create a figure for the confusion matrix
+    fig, ax = plt.subplots(figsize=(6, 6))
+    disp.plot(ax=ax, cmap="Blues", colorbar=False)
+    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}), F1-score: {best_val_f1})")
+    # Log to W&B
+    wandb.log({"best_confusion_matrix": wandb.Image(fig)})
+    plt.close(fig)
 
  
     # -------------- Save best model ------------------ #

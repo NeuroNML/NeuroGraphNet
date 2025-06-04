@@ -15,6 +15,7 @@ from torch_geometric.data import Dataset, Data
 
 # --------------------------- Custom imports ---------------------------#
 from src.utils.preprocessing_funcs import time_filtering
+from src.utils.general_funcs import log
 
 
 class GraphEEGDataset(Dataset):
@@ -132,12 +133,14 @@ class GraphEEGDataset(Dataset):
                     os.remove(os.path.join(self.processed_dir, fname))
 
             if selected_features_train == True:
+                log("Processing features")
                 self.process_features()
 
             elif embeddings_train == True:
+                log("Processing embeddings")
                 self.process_embeddings()
             else:
-                print("Processing sessions")
+                log("Processing sessions")
                 self.process_sessions()
 
     def _load_spatial_distances(self) -> Dict:
@@ -210,8 +213,8 @@ class GraphEEGDataset(Dataset):
                 self.n_channels, -1
             )  # (channels, features)
             # Normalize features
-            mean = segment_signal.mean(axis=0, keepdims=True)
-            std = segment_signal.std(axis=0, keepdims=True) + 1e-6
+            mean = segment_signal.mean(axis=1, keepdims=True)
+            std = segment_signal.std(axis=1, keepdims=True) + 1e-6
             segment_signal = (segment_signal - mean) / std
 
             # ------------------ Create Data object -----------------#
@@ -229,7 +232,7 @@ class GraphEEGDataset(Dataset):
             y = torch.tensor(
                 [self.clips["label"].values[index]], dtype=torch.float
             )  # BCELoss expects float labels
-
+           
             # Create Data object
             data = Data(
                 x=x,  # Node features: channels x time points
