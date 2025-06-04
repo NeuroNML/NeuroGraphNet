@@ -220,7 +220,9 @@ def train_model(
                 for i, label_idx in enumerate(labels_tensor):
                     sample_weights[i] = weight_per_class[label_idx]
                 
-                sampler = WeightedRandomSampler(weights=sample_weights, num_samples=num_samples_total, replacement=True)
+                # Convert tensor to list for WeightedRandomSampler
+                sample_weights_list = sample_weights.tolist()
+                sampler = WeightedRandomSampler(weights=sample_weights_list, num_samples=num_samples_total, replacement=True)
                 
                 train_loader_to_iterate = torch.utils.data.DataLoader(
                     original_train_dataset,
@@ -600,7 +602,7 @@ def evaluate_model(
     
     try:
         sub_df['id_numeric'] = pd.to_numeric(sub_df['id'], errors='coerce')
-        if sub_df['id_numeric'].notna().all(): 
+        if not sub_df['id_numeric'].isna().any(): 
              sub_df = sub_df.sort_values(by='id_numeric').drop(columns=['id_numeric'])
         else: 
              sub_df = sub_df.drop(columns=['id_numeric'])
