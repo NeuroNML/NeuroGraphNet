@@ -1,10 +1,12 @@
 model:
-  type: cnnbilstm
-  name: CNNLSTM
-  params:   
-    bidirectional: True   
-    dropout: 0.5      
-
+  type: bilstm
+  name: BiLSTM
+  params:
+    input_size: 19
+    hidden_size: 64
+    bidirectional: True
+    dropout: 0.5
+        
 batch_size: 64
 learning_rate: 0.001
 weight_decay: 0.001
@@ -12,8 +14,9 @@ epochs: 200
 seed: 42
 oversampling_power: 0.5
 
+
+selected_features: False
 embeddings: False
-selected_features:  False
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50
 apply_rereferencing: False

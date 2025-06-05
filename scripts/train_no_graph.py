@@ -18,7 +18,7 @@ import torch.optim as optim
 from torch.utils.data import Subset, WeightedRandomSampler, DataLoader
 
 from sklearn.model_selection import StratifiedGroupKFold, train_test_split
-from sklearn.metrics import f1_score, precision_score, recall_score
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 import wandb
@@ -132,8 +132,9 @@ def main():
 
     best_val_loss = float("inf")
     best_val_f1 = 0
+    best_val_auc = 0
     counter = 0
-    patience = 10
+    patience = 30
     log("Training started")
 
     for epoch in range(1, config.epochs + 1):
@@ -143,7 +144,8 @@ def main():
             x, y = batch
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            logits, _ = model(x)  
+            logits, _ = model(x) 
+            #logits = model(x)   
             loss = loss_fn(logits, y.reshape(-1, 1))
             #loss = loss_fn(out, y.reshape(-1, 1))
             loss.backward()
@@ -157,6 +159,7 @@ def main():
         model.eval()
         val_loss = 0
         all_preds = []
+        all_probs = []
         all_labels = []
 
         with torch.no_grad():
@@ -164,9 +167,11 @@ def main():
                 x, y = batch
                 x, y = x.to(device), y.to(device)
                 logits, _ = model(x)  
+                #logits = model(x)  
                 loss = loss_fn(logits, y.reshape(-1, 1))
                 val_loss += loss.item()
                 probs = torch.sigmoid(logits).squeeze()  # [batch_size, 1] -> [batch_size]
+                all_probs.extend(probs.cpu().numpy().ravel())
                 preds = (probs > 0.5).int()
                 all_preds.extend(preds.cpu().numpy().ravel())
                 probs = torch.sigmoid(logits).squeeze()
@@ -185,31 +190,40 @@ def main():
         precision = precision_score(all_labels, all_preds, average=None)
         recall = recall_score(all_labels, all_preds, average=None)
         f1 = f1_score(all_labels, all_preds, average=None)
+        val_auc = roc_auc_score(all_labels, all_probs)
 
-        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}")
+        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}| Val AUC: {val_auc:.4f}")
         #log(f"[Threshold sweep] Best threshold: {best_thresh:.2f}")
 
         # Confusion matrix + class 1 metrics
-        confusion_matrix_plot(best_preds, all_labels)
+        confusion_matrix_plot(all_preds, all_labels)
         log(f"Class 1 — Precision: {precision[1]:.2f}, Recall: {recall[1]:.2f}, F1: {f1[1]:.2f}")
 
         # W&B logging
         wandb.log({
             "epoch": epoch,
+           
             "train_loss": avg_train_loss,
             "val_loss": avg_val_loss,
             "val_f1": val_f1,
+            "val_auc": val_auc,
             "val_f1_class_1": f1[1],
             "val_f1_class_0": f1[0]
         })
 
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
+            best_val_f1_epoch = epoch
             best_state_dict = model.state_dict().copy()
             best_preds = all_preds.copy()
             best_labels = all_labels.copy()
             wandb.summary["best_f1_score"] = val_f1
             wandb.summary["f1_score_epoch"] = epoch
+        if val_auc > best_val_auc: 
+            best_val_f1 = val_f1
+            best_val_f1_epoch = epoch
+            wandb.summary["best_auc_score"] = val_auc
+            wandb.summary["best_auc_epoch"] = epoch
 
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
@@ -220,13 +234,13 @@ def main():
                 log("Early stopping triggered.")
                 break
     # -------------- Sve confusion matrix --------------------#
-    cm = confusion_matrix(best_labels, best_preds)
+    cm = confusion_matrix(best_labels, best_preds,  normalize='true')
     disp = ConfusionMatrixDisplay(confusion_matrix=cm)
 
     # Create a figure for the confusion matrix
     fig, ax = plt.subplots(figsize=(6, 6))
     disp.plot(ax=ax, cmap="Blues", colorbar=False)
-    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}), F1-score: {best_val_f1})")
+    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}), F1-score: {best_val_f1:.3f})")
     # Log to W&B
     wandb.log({"best_confusion_matrix": wandb.Image(fig)})
     plt.close(fig)
@@ -234,10 +248,10 @@ def main():
 
 
     # Save  embeddings
-    
+    '''
     model.load_state_dict(best_state_dict)
     model.eval()
-
+    
     all_embeddings = []
     all_labels = []
     
@@ -257,7 +271,7 @@ def main():
     log(np.array(all_embeddings).shape)
     np.save(embeddings_dir /"embeddings.npy", np.array(all_embeddings))  # shape: [N, 19, 128]
     np.save(embeddings_dir /"labels_embeddings.npy", np.array(all_labels))          # shape: [N]
-    
+    '''
 
     log(f"Best validation F1: {best_val_f1:.4f}")
     model_path = "model.pt"

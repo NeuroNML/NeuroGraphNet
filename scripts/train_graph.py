@@ -19,7 +19,7 @@ from omegaconf import OmegaConf
 
 
 from sklearn.model_selection import train_test_split, GroupKFold
-from sklearn.metrics import f1_score, recall_score, precision_score
+from sklearn.metrics import f1_score, recall_score, precision_score, roc_auc_score
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 
@@ -191,8 +191,9 @@ def main():
     # -------- Training loop -------- #
     best_val_loss = float("inf")
     best_val_f1 = 0
+    best_val_auc = 0
     best_val_f1_epoch = 0
-    patience = 10
+    patience = 30
     counter = 0
     log("Training started")
     
@@ -210,9 +211,12 @@ def main():
                 out, batch.y.reshape(-1, 1)
             )  # y: [batch_size] ->[batch_size, 1]
             loss.backward()
+            '''
+            # For debugging
             for name, param in model.named_parameters():
                 if param.grad is not None:
                     print(f"{name}: grad norm = {param.grad.norm().item():.2e}")
+            '''
             optimizer.step()
             total_loss += loss.item()
             
@@ -223,6 +227,7 @@ def main():
         val_loss = 0
         all_preds = []
         all_labels = []
+        all_probs = []
 
         with torch.no_grad():
             for batch in val_loader:
@@ -236,6 +241,7 @@ def main():
 
                 probs = torch.sigmoid(out).squeeze()  # [batch_size, 1] -> [batch_size]
                 preds = (probs > 0.5).int()
+                all_probs.extend(probs.cpu().numpy().ravel())
                 all_preds.extend(preds.cpu().numpy().ravel())
                 all_labels.extend(
                     batch.y.int().cpu().numpy().ravel()
@@ -255,15 +261,16 @@ def main():
 
         all_labels = np.array(all_labels).astype(int)
         all_preds = np.array(all_preds).astype(int)
+        all_probs = np.array(all_probs).astype(int)
 
         for name, param in model.named_parameters():
             if param.grad is not None:
                 log(f"{name} grad mean: {param.grad.abs().mean()}")
 
        
-        
+        val_auc = roc_auc_score(all_labels, all_probs)
         # Monitor progress
-        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}")
+        log(f"Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val F1: {val_f1:.4f}| Val AUC:  {val_auc:.4f} ")
         
         # Additional metrics
          # Confusion matrix
@@ -272,6 +279,7 @@ def main():
         precision = precision_score(all_labels, all_preds, average=None)
         recall = recall_score(all_labels, all_preds, average=None)
         f1 = f1_score(all_labels, all_preds, average=None)
+        
 
         # Print only for class 1
         log(f"Class 1 — Precision: {precision[1]:.2f}, Recall: {recall[1]:.2f}, F1: {f1[1]:.2f}")
@@ -284,6 +292,7 @@ def main():
                 "train_loss": avg_train_loss,
                 "val_loss": avg_val_loss,
                 "val_f1": val_f1,
+                "val_auc": val_auc,
                 "val_f1_class_1":f1[1],
                  "val_f1_class_0":f1[0]
             }
@@ -292,17 +301,24 @@ def main():
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             best_val_f1_epoch = epoch
+            best_state_dict = model.state_dict().copy()
             best_preds = all_preds.copy()
             best_labels = all_labels.copy()
             # Load best stats in wandb
             wandb.summary["best_f1_score"] = val_f1
             wandb.summary["f1_score_epoch"] = epoch
+        # ------------ Best AUC -----------------#
+        if val_auc > best_val_auc: 
+            best_val_auc = val_auc
+            best_val_auc_epoch = epoch
+            wandb.summary["best_auc_score"] = val_auc
+            wandb.summary["best_auc_epoch"] = epoch
         # ------- Early Stopping ------- #
         if avg_val_loss < best_val_loss:
             # Save best statistics and model
             best_val_loss = avg_val_loss
             counter = 0
-            best_state_dict = model.state_dict().copy()  # Save the best model state
+            #best_state_dict = model.state_dict().copy()  # Save the best model state
         else:
             counter += 1
             if counter >= patience:
@@ -310,6 +326,7 @@ def main():
                 break
 
     log(f"Best validation F1: {best_val_f1:.4f} at epoch {best_val_f1_epoch}")
+    log(f"Best validation AUC: {best_val_auc:.4f} at epoch {best_val_auc_epoch}")
 
     # -------------- Sve confusion matrix --------------------#
     cm = confusion_matrix(best_labels, best_preds, normalize="true")
@@ -318,7 +335,7 @@ def main():
     # Create a figure for the confusion matrix
     fig, ax = plt.subplots(figsize=(6, 6))
     disp.plot(ax=ax, cmap="Blues", colorbar=False)
-    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}), F1-score: {best_val_f1})")
+    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}), F1-score: {best_val_f1:.3f})")
     # Log to W&B
     wandb.log({"best_confusion_matrix": wandb.Image(fig)})
     plt.close(fig)

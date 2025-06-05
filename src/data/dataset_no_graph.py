@@ -19,6 +19,7 @@ class EEGTimeSeriesDataset(Dataset):
         embeddings_train: bool,
         extracted_features_dir: str,
         selected_features_train: bool,
+        flatten_features: bool, 
         signal_folder: str,
         segment_length: int = 3000,
         apply_rereferencing: bool = True,
@@ -92,7 +93,7 @@ class EEGTimeSeriesDataset(Dataset):
         for i in range(len(embeddings)):
             segment = embeddings[i]  # shape: [19, D]
 
-            # Normalize across nodes (per feature)
+            # Normalize across nodes (per feature) 
             mean = segment.mean(axis=0, keepdims=True)
             std = segment.std(axis=0, keepdims=True) + 1e-6
             segment_signal = (segment - mean) / std
@@ -100,7 +101,7 @@ class EEGTimeSeriesDataset(Dataset):
             y = torch.tensor(
                 [labels[i]], dtype=torch.float
             ) 
-            x = torch.tensor(segment_signal.flatten(), dtype=torch.float32) 
+            x = torch.tensor(segment_signal, dtype=torch.float32) 
             
 
             self.samples.append((x, y))
@@ -108,13 +109,15 @@ class EEGTimeSeriesDataset(Dataset):
     
 
     def _process_features(self):
-        extracted_features = np.load(self.extracted_features_dir / "X_train.npy")
+        #X = np.load(self.extracted_features_dir / "X_train.npy")
+        #X_DE = np.load(self.extracted_features_dir / "X_train_DE.npy")
+        extracted_features = np.load(self.extracted_features_dir / "X_significant_train.npy") # (N,19, F)
+       
+        
         for index, segment_signal in enumerate(
             extracted_features
-        ):  # (samples, extracted_features*electrodes)
-            segment_signal = segment_signal.reshape(
-                self.n_channels, -1
-            )  # (channels, features)
+        ):  # (19, F)
+            
             # Normalize features
             mean = segment_signal.mean(axis=0, keepdims=True)
             std = segment_signal.std(axis=0, keepdims=True) + 1e-6
@@ -123,7 +126,8 @@ class EEGTimeSeriesDataset(Dataset):
             y = torch.tensor(
                 [self.clips["label"].values[index]], dtype=torch.float
             ) 
-            x = torch.tensor(segment_signal.flatten(), dtype=torch.float32) 
+          
+            x = torch.tensor(segment_signal, dtype=torch.float32) # Return: (19, F)
             
 
             self.samples.append((x, y))

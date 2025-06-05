@@ -334,15 +334,17 @@ class GraphEEGDataset(Dataset):
         Returns:
             torch.Tensor: Edge index tensor of shape [2, num_edges]
         """
-        
+        '''
         if self.top_k == 19: # Fully connected
             edge_list = []
             for i in range(self.num_channels):
                 for j in range(self.num_channels):
                     if i != j:
                      edge_list.append([i, j])
+        
             return  torch.tensor(edge_list, dtype=torch.long).t().contiguous()
-        elif self.edge_strategy == "spatial":
+        '''
+        if self.edge_strategy == "spatial":
             return self._create_spatial_edges()
         elif self.edge_strategy == "correlation":
             return self._create_correlation_edges(signal_data)

@@ -2,17 +2,18 @@ model:
   type: mlp_no_graph
   name: EEGBaselineMLP
   params:
-    input_dim: 2432
+    input_dim: 3230
+    dropout: 0.4
 
-batch_size: 32
+batch_size: 64
 learning_rate: 0.001
-weight_decay: 0
+weight_decay: 0.0005
 epochs: 200
 seed: 42
-oversampling_power: 1
+oversampling_power: 0.5
 
-embeddings: True
-selected_features: False
+embeddings: False
+selected_features: True
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50
 apply_rereferencing: False
