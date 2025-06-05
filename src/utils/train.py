@@ -1,6 +1,8 @@
 from collections import OrderedDict, defaultdict # Added defaultdict
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
+import time  # Add time import
+import logging  # Add logging import
 
 import pandas as pd
 import torch
@@ -22,6 +24,13 @@ except ImportError:
     WANDB_AVAILABLE = False
     print("Warning: wandb not available. Install with 'pip install wandb' for experiment tracking.") 
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 def _save(
     model: nn.Module,
@@ -132,9 +141,18 @@ def train_model(
     and batch_data is a tuple (input_features, labels).
     If use_gnn=True, it expects PyG Batch objects.
     """
+    logger.info("Starting training setup...")
+    logger.info(f"Model type: {'GNN' if use_gnn else 'Standard'}")
+    logger.info(f"Device: {device}")
+    logger.info(f"Batch size: {train_loader.batch_size}")
+    logger.info(f"Number of epochs: {num_epochs}")
+    logger.info(f"Patience: {patience}")
+    logger.info(f"Monitor metric: {monitor}")
+    
     # Initialize wandb if requested and available
     wandb_run = None
     if log_wandb and WANDB_AVAILABLE:
+        logger.info("Initializing wandb...")
         # Prepare wandb config
         config = {
             'model_type': 'GNN' if use_gnn else 'Standard',
@@ -211,106 +229,54 @@ def train_model(
         save_path.unlink()
 
     train_loader_to_iterate = train_loader
-
-    if use_oversampling:
-        print("🔍 Applying oversampling to the training data...")
-        original_train_dataset = train_loader.dataset
-
-        all_labels_list = []
-        labels_source_attribute_name = None
-        # Attempt to get all labels at once from common attributes (optimization)
-        if hasattr(original_train_dataset, 'y') and isinstance(original_train_dataset.y, torch.Tensor):
-            if original_train_dataset.y.ndim == 1 and len(original_train_dataset.y) == len(original_train_dataset):
-                all_labels_list = [int(l.item()) for l in original_train_dataset.y.cpu()]
-                labels_source_attribute_name = "dataset.y"
-            elif original_train_dataset.y.ndim == 2 and original_train_dataset.y.shape[1] == 1 and len(original_train_dataset.y) == len(original_train_dataset):
-                all_labels_list = [int(l.item()) for l in original_train_dataset.y.cpu().squeeze()]
-                labels_source_attribute_name = "dataset.y (squeezed)"
-        elif use_gnn and hasattr(original_train_dataset, 'data') and hasattr(original_train_dataset.data, 'y'):
-            # Common for PyG InMemoryDataset
-            potential_labels = original_train_dataset.data.y
-            if isinstance(potential_labels, torch.Tensor) and potential_labels.ndim == 1 and len(potential_labels) == len(original_train_dataset):
-                all_labels_list = [int(l.item()) for l in potential_labels.cpu()]
-                labels_source_attribute_name = "dataset.data.y (PyG InMemoryDataset)"
-        
-        if labels_source_attribute_name:
-            print(f"  Extracted {len(all_labels_list)} labels directly from '{labels_source_attribute_name}'.")
-        else:
-            print(f"  Attribute-based label extraction not applicable or failed. Iterating through {len(original_train_dataset)} dataset samples...")
-            for i in tqdm(range(len(original_train_dataset)), desc="Collecting labels for oversampling", ncols=100, leave=False):
-                data_sample = original_train_dataset[i]
-                label_value = None
-                if use_gnn: # Expect PyG Data object
-                    if hasattr(data_sample, 'y') and data_sample.y is not None: label_value = data_sample.y
-                else: # Not use_gnn
-                    if isinstance(data_sample, (list, tuple)) and len(data_sample) >= 2: label_value = data_sample[1]
-                    elif hasattr(data_sample, 'y') and data_sample.y is not None: label_value = data_sample.y
-
-                if label_value is not None:
-                    if isinstance(label_value, torch.Tensor):
-                        if label_value.numel() == 1: all_labels_list.append(int(label_value.item()))
-                    elif isinstance(label_value, (int, float)): all_labels_list.append(int(label_value))
-            print(f"  Finished iterating. Collected {len(all_labels_list)} labels.")
-
-        if not all_labels_list:
-            print("  ⚠️ Could not extract any labels for oversampling. Proceeding without it.")
-        else:
-            labels_tensor = torch.tensor(all_labels_list, dtype=torch.long)
-            class_counts = torch.bincount(labels_tensor)
-
-            if len(class_counts) < 2:
-                print(f"  ⚠️ Only {len(class_counts)} class(es) found (counts: {class_counts.tolist()}). Oversampling ineffective. Proceeding without it.")
-            elif class_counts.min() == 0: # Should not happen if all_labels_list is populated from these classes
-                print(f"  ⚠️ One class has zero samples (counts: {class_counts.tolist()}). Oversampling cannot be applied. Proceeding without it.")
-            else:
-                print(f"  Class counts before oversampling: {class_counts.tolist()}")
-                num_samples_total = len(labels_tensor)
-                weight_per_class = 1. / class_counts.float()
-                sample_weights = torch.zeros(num_samples_total, dtype=torch.float)
-                for i, label_idx in enumerate(labels_tensor):
-                    sample_weights[i] = weight_per_class[label_idx]
-                
-                # Convert tensor to list for WeightedRandomSampler
-                sample_weights_list = sample_weights.tolist()
-                sampler = WeightedRandomSampler(weights=sample_weights_list, num_samples=num_samples_total, replacement=True)
-                
-                train_loader_to_iterate = torch.utils.data.DataLoader(
-                    original_train_dataset,
-                    batch_size=train_loader.batch_size,
-                    sampler=sampler, # Key change
-                    num_workers=train_loader.num_workers,
-                    pin_memory=train_loader.pin_memory,
-                    collate_fn=train_loader.collate_fn,
-                    drop_last=train_loader.drop_last
-                )
-                print(f"  Successfully created an oversampled DataLoader.")
+    total_batches = len(train_loader_to_iterate)
+    logger.info(f"Total training batches per epoch: {total_batches}")
 
     bad_epochs = 0
-    print(f"💪 Starting training from epoch {start_epoch + 1} to {num_epochs}...")
-    # Corrected initial for tqdm if resuming
+    logger.info(f"Starting training from epoch {start_epoch + 1} to {num_epochs}")
     pbar = tqdm(range(start_epoch + 1, num_epochs + 1), desc="Epochs", ncols=120, initial=start_epoch + 1, total=num_epochs)
 
     for epoch in pbar:
+        epoch_start_time = time.time()
         model.train()
         epoch_train_loss = 0.0
         all_train_preds, all_train_targets = [], []
-
-        for data_batch_item in train_loader_to_iterate: # Use the potentially oversampled loader
+        
+        logger.info(f"\nEpoch {epoch}/{num_epochs} - Training phase")
+        batch_times = []
+        
+        for batch_idx, data_batch_item in enumerate(train_loader_to_iterate):
+            batch_start_time = time.time()
+            
+            if batch_idx % 10 == 0:  # Log every 10 batches
+                logger.info(f"Processing batch {batch_idx + 1}/{total_batches}")
+            
             optimizer.zero_grad(set_to_none=True)
 
             if use_gnn:
-                if not PyGBatch or not to_dense_batch:
-                    raise ImportError("PyTorch Geometric is required for GNN mode.")
                 curr_batch = data_batch_item.to(device)
                 y_targets = curr_batch.y
-                if y_targets is None: continue
+                if y_targets is None:
+                    logger.warning(f"Batch {batch_idx} has no targets, skipping...")
+                    continue
+                    
+                if batch_idx == 0:  # Log shapes only for first batch
+                    logger.info(f"Batch shapes - x: {curr_batch.x.shape}, edge_index: {curr_batch.edge_index.shape}, y: {y_targets.shape}")
+                
                 y_targets = y_targets.float().unsqueeze(1)
                 if not (hasattr(curr_batch, 'x') and hasattr(curr_batch, 'edge_index')):
                     raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
-                logits = model(curr_batch.x.float(),
-                               curr_batch.edge_index,
-                               curr_batch.batch if hasattr(curr_batch, 'batch') else None)
-            else: # Non-GNN
+                
+                try:
+                    logits = model(curr_batch.x.float(),
+                                 curr_batch.edge_index,
+                                 curr_batch)
+                except Exception as e:
+                    logger.error(f"Error in forward pass for batch {batch_idx}: {str(e)}")
+                    logger.error(f"Edge index shape: {curr_batch.edge_index.shape}")
+                    logger.error(f"Edge index content: {curr_batch.edge_index}")
+                    raise
+            else:
                 if isinstance(data_batch_item, (tuple, list)) and len(data_batch_item) == 2:
                     x_batch, y_batch = data_batch_item
                     x_batch = x_batch.to(device)
@@ -342,18 +308,37 @@ def train_model(
                 else:
                     raise ValueError("Batch data must be a tuple (x, y) or have 'x' and 'y' attributes for non-GNN mode.")
 
-            loss = criterion(logits, y_targets)
+            # the logits are the predictions: % probability of being positive
+            # we need to convert them to binary predictions
+            probs = logits.sigmoid().squeeze()  # [batch_size, 1] -> [batch_size]
+            preds = (probs > 0.5).int()
+            
+            # compute loss
+            loss = criterion(preds, y_targets)
             loss.backward()
             if grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
 
+            # store round results
             epoch_train_loss += loss.item()
-            all_train_preds.append(logits.sigmoid().detach().cpu())
-            all_train_targets.append(y_targets.detach().cpu())
+            all_train_preds.append(preds.cpu().numpy().ravel())
+            all_train_targets.append(y_targets.int().cpu().numpy().ravel())
+            
+            batch_time = time.time() - batch_start_time
+            batch_times.append(batch_time)
+            
+            if batch_idx % 10 == 0:  # Log every 10 batches
+                avg_batch_time = sum(batch_times[-10:]) / min(10, len(batch_times))
+                logger.info(f"Batch {batch_idx + 1}/{total_batches} - Loss: {loss.item():.4f} - Avg batch time: {avg_batch_time:.2f}s")
 
+        # Epoch training metrics
         avg_train_loss = epoch_train_loss / max(1, len(train_loader_to_iterate))
         train_history['loss'].append(avg_train_loss)
+        
+        epoch_time = time.time() - epoch_start_time
+        logger.info(f"\nEpoch {epoch} training completed in {epoch_time:.2f}s")
+        logger.info(f"Average training loss: {avg_train_loss:.4f}")
 
         if all_train_preds and all_train_targets:
             preds_cat_train = torch.cat(all_train_preds)
@@ -382,9 +367,9 @@ def train_model(
                     y_targets_val = y_targets_val.float().unsqueeze(1)
                     if not (hasattr(curr_batch, 'x') and hasattr(curr_batch, 'edge_index')):
                          raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
-                    logits_val = model(curr_batch.x.float(),
+                    logits = model(curr_batch.x.float(),
                                    curr_batch.edge_index,
-                                   curr_batch.batch if hasattr(curr_batch, 'batch') else None)
+                                   curr_batch)
                 else: # Non-GNN
                     if isinstance(data_batch_item_val, (tuple, list)) and len(data_batch_item_val) == 2:
                         x_batch_val, y_batch_val = data_batch_item_val
@@ -393,7 +378,7 @@ def train_model(
                             y_targets_val = y_batch_val.to(device) if isinstance(y_batch_val, torch.Tensor) else torch.tensor(y_batch_val, device=device)
                             y_targets_val = y_targets_val.float().unsqueeze(1) if y_targets_val.ndim == 1 else y_targets_val.float()
                         else: continue # Skip if no labels in validation
-                        logits_val = model(x_batch_val.float())
+                        logits = model(x_batch_val.float())
                     elif hasattr(data_batch_item_val, 'x') and hasattr(data_batch_item_val, 'y'):
                         curr_batch = data_batch_item_val.to(device)
                         y_targets_val = curr_batch.y
@@ -410,16 +395,20 @@ def train_model(
                             if node_features_tensor.size(0) == expected_total_nodes:
                                 input_features_val = node_features_tensor.view(curr_batch.num_graphs, n_channels, num_features_per_channel)
                             else:
-                                input_features_val, _ = to_dense_batch(node_features_tensor, curr_batch.batch, max_num_nodes=n_channels)
+                                input_features_val, _ = to_dense_batch(node_features_tensor, curr_batch, max_num_nodes=n_channels)
                         elif curr_batch.num_graphs == 0: continue # Skip empty val batch
                         else: raise ValueError(f"Unexpected num_graphs in val: {curr_batch.num_graphs}.")
-                        logits_val = model(input_features_val.float())
+                        logits = model(input_features_val.float())
                     else:
                         raise ValueError("Val batch data must be a tuple (x, y) or have 'x' and 'y' attributes for non-GNN mode.")
 
-                epoch_val_loss += criterion(logits_val, y_targets_val).item()
-                all_val_preds.append(logits_val.sigmoid().cpu())
-                all_val_targets.append(y_targets_val.cpu())
+                # Convert logits to binary predictions
+                probs = logits.sigmoid().squeeze()  # [batch_size, 1] -> [batch_size]
+                preds = (probs > 0.5).int()
+                
+                epoch_val_loss += criterion(preds, y_targets_val).item()
+                all_val_preds.append(preds.cpu().numpy().ravel())
+                all_val_targets.append(y_targets_val.int().cpu().numpy().ravel())
         
         avg_val_loss = epoch_val_loss / max(1, len(val_loader))
         val_history['loss'].append(avg_val_loss)
@@ -492,10 +481,10 @@ def train_model(
                 scheduler.step()
         
         postfix_dict = {
-            "train_loss": f"{train_history['loss'][-1]:.4f}" if train_history['loss'] else "N/A",
-            "val_loss": f"{val_history['loss'][-1]:.4f}" if val_history['loss'] else "N/A",
+            "train_loss": f"{train_history['loss'][-1]:.4f}",
+            "val_loss": f"{val_history['loss'][-1]:.4f}",
             f"best_{monitor}": f"{best_score:.4f}",
-            "lr": f"{optimizer.param_groups[0]['lr']:.2e}", # Check if optimizer.param_groups exists
+            "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
             "bad_epochs": f"{bad_epochs}/{patience}",
             "save": "✓" if improved else "-"
         }
@@ -504,46 +493,20 @@ def train_model(
         pbar.set_postfix(postfix_dict)
 
         if patience > 0 and bad_epochs >= patience:
-            pbar.write(f"🛑 Early stopping: no '{monitor}' improvement in {patience} epochs.")
+            logger.info(f"Early stopping triggered: no '{monitor}' improvement in {patience} epochs")
             break
     
     pbar.close()
-    print("\n✅ Training complete.")
+    logger.info("Training completed successfully!")
     
-    # Log final results to wandb
-    if log_wandb and wandb_run:
-        try:
-            # Log final summary metrics
-            wandb.summary[f"final_best_{monitor}"] = best_score
-            wandb.summary["final_epoch"] = epoch if 'epoch' in locals() else num_epochs
-            wandb.summary["total_bad_epochs"] = bad_epochs
-            
-            # Save model artifact if training completed successfully
-            if save_path.exists():
-                artifact = wandb.Artifact("best_model", type="model")
-                artifact.add_file(str(save_path))
-                wandb.log_artifact(artifact)
-                print(f"📁 Model artifact saved to wandb: {save_path}")
-            
-        except Exception as e:
-            print(f"⚠️ Warning: Could not save final results to wandb: {e}")
+    # Log final results
+    final_metrics = {
+        "final_best_score": best_score,
+        "final_epoch": epoch,
+        "total_bad_epochs": bad_epochs
+    }
+    logger.info(f"Final results: {final_metrics}")
     
-    if save_path.exists():
-        print(f"↩️ Loading best model state from {save_path} for return.")
-        # Load only model weights, not optimizer or epoch for the final returned model
-        final_checkpoint = torch.load(save_path, map_location=device, weights_only=False)
-        model.load_state_dict(final_checkpoint['model_state_dict'])
-    else:
-        print(" ⚠️ No checkpoint was saved during training (or an error occurred). Model reflects last epoch state.")
-
-    # Finish wandb run
-    if log_wandb and wandb_run:
-        try:
-            wandb.finish()
-            print("🔗 Wandb run finished")
-        except Exception as e:
-            print(f"⚠️ Warning: Could not finish wandb run: {e}")
-
     return dict(train_history), dict(val_history)
 
 def evaluate_model(

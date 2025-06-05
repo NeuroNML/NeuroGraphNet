@@ -3,6 +3,8 @@ import os.path as osp
 import os
 from typing import Optional, Dict, Tuple, List
 from collections import defaultdict
+import logging
+import time
 
 import pandas as pd
 import numpy as np
@@ -12,6 +14,13 @@ from scipy import signal
 import torch
 from torch_geometric.data import Dataset, Data
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # --------------------------- Custom imports ---------------------------#
 from src.utils.preprocessing_funcs import time_filtering
@@ -55,6 +64,20 @@ class GraphEEGDataset(Dataset):
             pre_filter: Pre-filter to be applied to each data object
             sampling_rate: Sampling rate of the EEG data - fixed to 250 Hz
         """
+        logger.info("Initializing GraphEEGDataset...")
+        logger.info(f"Dataset parameters:")
+        logger.info(f"  - Root directory: {root}")
+        logger.info(f"  - Edge strategy: {edge_strategy}")
+        logger.info(f"  - Top-k neighbors: {top_k}")
+        logger.info(f"  - Correlation threshold: {correlation_threshold}")
+        logger.info(f"  - Force reprocess: {force_reprocess}")
+        logger.info(f"  - Bandpass frequencies: {bandpass_frequencies}")
+        logger.info(f"  - Segment length: {segment_length}")
+        logger.info(f"  - Apply filtering: {apply_filtering}")
+        logger.info(f"  - Apply rereferencing: {apply_rereferencing}")
+        logger.info(f"  - Apply normalization: {apply_normalization}")
+        logger.info(f"  - Sampling rate: {sampling_rate}")
+
         self.root = root
         self.clips = clips
         self.signal_folder = signal_folder
@@ -98,11 +121,13 @@ class GraphEEGDataset(Dataset):
         ]
 
         self.n_channels = len(self.channels)  # Number of EEG channels
+        logger.info(f"Number of EEG channels: {self.n_channels}")
 
         # Ids to eliminate
         self.ids_to_eliminate = []
 
         # Define frequency filters
+        logger.info("Setting up signal filters...")
         self.bp_filter = signal.butter(
             4,
             self.bandpass_frequencies,
@@ -117,30 +142,36 @@ class GraphEEGDataset(Dataset):
 
         # Load spatial distances if applicable
         if edge_strategy == "spatial" and spatial_distance_file is not None:
+            logger.info(f"Loading spatial distances from {spatial_distance_file}")
             self.spatial_distances = self._load_spatial_distances()
+            logger.info(f"Loaded {len(self.spatial_distances)} spatial distance pairs")
 
         super().__init__(root, transform=None, pre_transform=None, pre_filter=None)
 
         # Ensure the processed_dir exists
         if not os.path.exists(self.processed_dir):
+            logger.info(f"Creating processed directory at {self.processed_dir}")
             os.makedirs(self.processed_dir)
 
         if self.force_reprocess == True:
-
+            logger.info("Force reprocessing enabled - cleaning up existing processed files")
             # Delete all previous .pt files
+            deleted_count = 0
             for fname in os.listdir(self.processed_dir):
                 if fname.startswith("data_") and fname.endswith(".pt"):
                     os.remove(os.path.join(self.processed_dir, fname))
+                    deleted_count += 1
+            logger.info(f"Deleted {deleted_count} existing processed files")
 
             if selected_features_train == True:
-                log("Processing features")
+                logger.info("Starting feature processing...")
                 self.process_features()
 
             elif embeddings_train == True:
-                log("Processing embeddings")
+                logger.info("Starting embedding processing...")
                 self.process_embeddings()
             else:
-                log("Processing sessions")
+                logger.info("Starting session processing...")
                 self.process_sessions()
 
     def _load_spatial_distances(self) -> Dict:
@@ -152,6 +183,9 @@ class GraphEEGDataset(Dataset):
         Returns:
             Dictionary of distances or adjacency matrix
         """
+        logger.info(f"Loading spatial distances from {self.spatial_distance_file}")
+        start_time = time.time()
+        
         spatial_distances = (
             {}
         )  # Dictionary to store distances between electrodes with keys (tuple) as (ch1, ch2)
@@ -164,6 +198,8 @@ class GraphEEGDataset(Dataset):
             spatial_distances[(ch1, ch2)] = dist
             spatial_distances[(ch2, ch1)] = dist
 
+        load_time = time.time() - start_time
+        logger.info(f"Loaded {len(spatial_distances)} spatial distances in {load_time:.2f}s")
         return spatial_distances
 
     def process_embeddings(self):
@@ -174,12 +210,23 @@ class GraphEEGDataset(Dataset):
             embeddings (np.ndarray): shape [N, 19, D]
             labels (np.ndarray): shape [N]
         """
+        logger.info("Starting embedding processing...")
+        start_time = time.time()
+
         embeddings = np.load(self.embeddings_dir / "embeddings.npy")
         labels = np.load(self.embeddings_dir / "labels_embeddings.npy")
+        logger.info(f"Loaded embeddings shape: {embeddings.shape}, labels shape: {labels.shape}")
+
         assert len(embeddings) == len(labels), "Mismatch between embeddings and labels"
 
         idx = 0
+        processed_count = 0
+        skipped_count = 0
+        
         for i in range(len(embeddings)):
+            if i % 100 == 0:
+                logger.info(f"Processing embedding {i+1}/{len(embeddings)}")
+                
             segment = embeddings[i]  # shape: [19, D]
 
             # Normalize across nodes (per feature)
@@ -191,24 +238,40 @@ class GraphEEGDataset(Dataset):
             edge_index = self._create_edges(segment)
 
             if edge_index.numel() == 0:
+                logger.warning(f"Skipping embedding {i} - no edges created")
                 self.ids_to_eliminate.append(i)
+                skipped_count += 1
                 continue
 
             y = torch.tensor([labels[i]], dtype=torch.float32)
 
             data = Data(x=x, edge_index=edge_index, y=y)
-            torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
-            idx += 1
+            torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
+            processed_count += 1
+
+        total_time = time.time() - start_time
+        logger.info(f"Embedding processing completed in {total_time:.2f}s")
+        logger.info(f"Processed {processed_count} embeddings, skipped {skipped_count}")
 
     def process_features(self):
         """
         Processes extracted features from samples into PyTorch Geometric Data objects.
         """
+        logger.info("Starting feature processing...")
+        start_time = time.time()
+
         extracted_features = np.load(self.extracted_features_dir / "X_train_DE.npy")
-        idx = 0
+        logger.info(f"Loaded features shape: {extracted_features.shape}")
+        
+        processed_count = 0
+        skipped_count = 0
+
         for index, segment_signal in enumerate(
             extracted_features
         ):  # (samples, extracted_features*electrodes)
+            if index % 100 == 0:
+                logger.info(f"Processing feature {index+1}/{len(extracted_features)}")
+                
             segment_signal = segment_signal.reshape(
                 self.n_channels, -1
             )  # (channels, features)
@@ -225,7 +288,9 @@ class GraphEEGDataset(Dataset):
             edge_index = self._create_edges(segment_signal)
 
             if edge_index.shape == torch.Size([0]):
+                logger.warning(f"Skipping feature {index} - no edges created")
                 self.ids_to_eliminate.append(index)
+                skipped_count += 1
                 continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
 
             # Create label tensor
@@ -241,20 +306,31 @@ class GraphEEGDataset(Dataset):
             )
 
             # Save processed data
-            torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
-            idx += 1
+            torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
+            processed_count += 1
+
+        total_time = time.time() - start_time
+        logger.info(f"Feature processing completed in {total_time:.2f}s")
+        logger.info(f"Processed {processed_count} features, skipped {skipped_count}")
 
     def process_sessions(self):
         """
         Processes raw data into PyTorch Geometric Data objects.
         """
+        logger.info("Starting session processing...")
+        start_time = time.time()
+
         sessions = list(
             self.clips.groupby(["patient", "session"])
         )  # List of tuples: ((patient_id, session_id), session_df)
 
-        idx = 0
+        processed_count = 0
+        skipped_count = 0
 
-        for (_, _), session_df in sessions:
+        for session_idx, ((patient, session), session_df) in enumerate(sessions):
+            session_start_time = time.time()
+            logger.info(f"Processing session {session_idx+1}/{len(sessions)} (Patient {patient}, Session {session})")
+            
             # Load signal data (for complete session)
             session_signal = pd.read_parquet(
                 f"{self.signal_folder}/{session_df['signals_path'].values[0]}"  # Any 'signal_path' in session_df points to same parquet
@@ -262,6 +338,7 @@ class GraphEEGDataset(Dataset):
 
             # ------------------------- Preprocess signal data ---------------------------#
             session_signal = self._preprocess_signal(session_signal)
+            logger.info(f"Preprocessed signal shape: {session_signal.shape}")
 
             #  ------------ Extract corresponding segments from signal ---------------------#
 
@@ -269,6 +346,9 @@ class GraphEEGDataset(Dataset):
                 index,
                 row,
             ) in session_df.iterrows():  # Each row corresponds to a segment
+                if processed_count % 100 == 0:
+                    logger.info(f"Processed {processed_count} segments so far")
+                    
                 start = int(row["start_time"] * self.sampling_rate)
                 end = int(row["end_time"] * self.sampling_rate)
                 segment_signal = session_signal[
@@ -282,7 +362,9 @@ class GraphEEGDataset(Dataset):
                 edge_index = self._create_edges(segment_signal)
 
                 if edge_index.shape == torch.Size([0]):
+                    logger.warning(f"Skipping segment {index} - no edges created")
                     self.ids_to_eliminate.append(index)
+                    skipped_count += 1
                     continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
 
                 # Create label tensor
@@ -298,8 +380,15 @@ class GraphEEGDataset(Dataset):
                 )
 
                 # Save processed data
-                torch.save(data, osp.join(self.processed_dir, f"data_{idx}.pt"))
-                idx += 1
+                torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
+                processed_count += 1
+
+            session_time = time.time() - session_start_time
+            logger.info(f"Session {session_idx+1} processed in {session_time:.2f}s")
+
+        total_time = time.time() - start_time
+        logger.info(f"Session processing completed in {total_time:.2f}s")
+        logger.info(f"Processed {processed_count} segments, skipped {skipped_count}")
 
     def _filter_signal(self, signal):
         return time_filtering(
@@ -336,15 +425,18 @@ class GraphEEGDataset(Dataset):
         """
         
         if self.top_k == 19: # Fully connected
+            logger.debug("Creating fully connected graph")
             edge_list = []
-            for i in range(self.num_channels):
-                for j in range(self.num_channels):
+            for i in range(self.n_channels):
+                for j in range(self.n_channels):
                     if i != j:
                      edge_list.append([i, j])
             return  torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         elif self.edge_strategy == "spatial":
+            logger.debug("Creating edges based on spatial distances")
             return self._create_spatial_edges()
         elif self.edge_strategy == "correlation":
+            logger.debug("Creating edges based on correlation")
             return self._create_correlation_edges(signal_data)
         else:
             raise ValueError(f"Unknown edge strategy: {self.edge_strategy}")
@@ -359,6 +451,7 @@ class GraphEEGDataset(Dataset):
         Returns:
             torch.Tensor: edge_index tensor for PyTorch Geometric
         """
+        logger.debug("Building spatial distance matrix")
         num_channels = len(self.channels)
         edge_list = []
         adj_dict = defaultdict(list)
@@ -374,7 +467,7 @@ class GraphEEGDataset(Dataset):
                     distance_matrix[i, j] = dist
 
         if self.top_k:
-            # Top-k closest neighbors per node
+            logger.debug(f"Creating top-{self.top_k} spatial connections")
             for i in range(num_channels):
                 top_indices = np.argsort(distance_matrix[i])[: self.top_k]
                 for j in top_indices:
@@ -387,13 +480,14 @@ class GraphEEGDataset(Dataset):
                 for j in neighbors:
                     edge_list.append([i, j])
         else:
-            # Fully connected (no self-loops)
+            logger.debug("Creating fully connected spatial graph")
             for i in range(num_channels):
                 for j in range(num_channels):
                     if i != j:
                         edge_list.append([i, j])
 
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        logger.debug(f"Created {edge_index.shape[1]} spatial edges")
         return edge_index
 
     def _create_correlation_edges(self, signal_data: pd.DataFrame) -> torch.Tensor:
@@ -409,12 +503,15 @@ class GraphEEGDataset(Dataset):
         Returns:
             torch.Tensor: Edge index tensor (2, num_edges)
         """
+        logger.debug("Computing correlation matrix")
         corr_matrix = np.abs(np.corrcoef(signal_data))
 
         # Eliminate samples with NaN in corr matrix (0 signal)
         if np.isnan(corr_matrix).any():
+             logger.warning("Invalid correlations detected (NaN), returning empty edge index")
              return torch.empty(0)
         if np.isinf(corr_matrix).any():
+             logger.warning("Invalid correlations detected (Inf), returning empty edge index")
              return  torch.empty(0)
             
 
@@ -422,7 +519,7 @@ class GraphEEGDataset(Dataset):
         edge_list = []
 
         if self.top_k:
-            # Top-k strongest correlations per node (excluding self)
+            logger.debug(f"Creating top-{self.top_k} correlation connections")
             adj_dict = defaultdict(set)
 
             for i in range(num_channels):
@@ -439,7 +536,7 @@ class GraphEEGDataset(Dataset):
                     edge_list.append([i, j])
 
         else:
-            # Threshold-based connections
+            logger.debug(f"Creating correlation connections with threshold {self.correlation_threshold}")
             for i in range(num_channels):
                 for j in range(i + 1, num_channels):
                     if corr_matrix[i, j] >= self.correlation_threshold:
@@ -447,13 +544,16 @@ class GraphEEGDataset(Dataset):
                         edge_list.append([j, i])
 
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        logger.debug(f"Created {edge_index.shape[1]} correlation edges")
         return edge_index
 
     def len(self) -> int:
         """
         Returns the number of examples in the dataset (number of graphs saved)
         """
-        return len(self.processed_file_names)
+        length = len(self.processed_file_names)
+        logger.debug(f"Dataset length: {length}")
+        return length
 
     def get(self, idx: int) -> Data:
         """
@@ -462,11 +562,14 @@ class GraphEEGDataset(Dataset):
         file_path = osp.join(self.processed_dir, f"data_{idx}.pt")
         try:
             data = torch.load(file_path)
+            logger.debug(f"Loaded data from {file_path}")
         except Exception as e:
             # Handle PyTorch 2.6+ weights_only error
             if "weights_only" in str(e).lower():
+                logger.debug(f"Retrying load with weights_only=False for {file_path}")
                 data = torch.load(file_path, weights_only=False)
             else:
+                logger.error(f"Error loading {file_path}: {e}")
                 raise RuntimeError(f"Error loading processed file {file_path} for index {idx}: {e}")
         return data
 
@@ -481,7 +584,7 @@ class GraphEEGDataset(Dataset):
         """
 
         # return [f"data_{i}.pt" for i in range(len(self.clips))]
-        return sorted(
+        files = sorted(
             [
                 f
                 for f in os.listdir(self.processed_dir)
@@ -489,3 +592,5 @@ class GraphEEGDataset(Dataset):
                 and f.endswith(".pt")  # Guard against other files
             ]
         )
+        logger.debug(f"Found {len(files)} processed files")
+        return files
