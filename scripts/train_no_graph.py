@@ -220,8 +220,8 @@ def main():
             wandb.summary["best_f1_score"] = val_f1
             wandb.summary["f1_score_epoch"] = epoch
         if val_auc > best_val_auc: 
-            best_val_f1 = val_f1
-            best_val_f1_epoch = epoch
+            best_val_auc = val_auc
+            best_val_auc_epoch = epoch
             wandb.summary["best_auc_score"] = val_auc
             wandb.summary["best_auc_epoch"] = epoch
 
@@ -233,7 +233,10 @@ def main():
             if counter >= patience:
                 log("Early stopping triggered.")
                 break
-    # -------------- Sve confusion matrix --------------------#
+
+    log(f"Best validation F1: {best_val_f1:.4f} at epoch {best_val_f1_epoch}")
+    log(f"Best validation AUC: {best_val_auc:.4f} at epoch {best_val_auc_epoch}")
+    # -------------- Save confusion matrix --------------------#
     cm = confusion_matrix(best_labels, best_preds,  normalize='true')
     disp = ConfusionMatrixDisplay(confusion_matrix=cm)
 
