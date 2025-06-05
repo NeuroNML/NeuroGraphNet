@@ -73,7 +73,7 @@ class EEGGCN(torch.nn.Module):
             x = self.bn_layers[-1](x)
             x = F.relu(x)
         
-        # Global pooling: combine all node features for each graph
+        # Global pooling
         x = global_mean_pool(x, batch)
         
         # Final classification

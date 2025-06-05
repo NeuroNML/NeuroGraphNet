@@ -263,14 +263,16 @@ def train_model(
                 if batch_idx == 0:  # Log shapes only for first batch
                     logger.info(f"Batch shapes - x: {curr_batch.x.shape}, edge_index: {curr_batch.edge_index.shape}, y: {y_targets.shape}")
                 
-                y_targets = y_targets.float().unsqueeze(1)
                 if not (hasattr(curr_batch, 'x') and hasattr(curr_batch, 'edge_index')):
                     raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
                 
                 try:
+                    # cast y_targets to int64 (needed)
                     logits = model(curr_batch.x.float(),
                                  curr_batch.edge_index,
-                                 curr_batch)
+                                 curr_batch.batch)
+                    # unsqueeze y_targets to match the shape of the logits. used later!
+                    y_targets = y_targets.float().unsqueeze(1)
                 except Exception as e:
                     logger.error(f"Error in forward pass for batch {batch_idx}: {str(e)}")
                     logger.error(f"Edge index shape: {curr_batch.edge_index.shape}")
@@ -369,7 +371,7 @@ def train_model(
                          raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
                     logits = model(curr_batch.x.float(),
                                    curr_batch.edge_index,
-                                   curr_batch)
+                                   curr_batch.batch)
                 else: # Non-GNN
                     if isinstance(data_batch_item_val, (tuple, list)) and len(data_batch_item_val) == 2:
                         x_batch_val, y_batch_val = data_batch_item_val
@@ -579,7 +581,7 @@ def evaluate_model(
                      raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
                 logits = model(batch_data.x.float(), 
                                batch_data.edge_index, 
-                               batch_data.batch if hasattr(batch_data, 'batch') else None)
+                               batch_data.batch)
             else:
                 # Handle non-GNN models based on input_type
                 if input_type == 'feature':

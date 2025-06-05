@@ -3,11 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import global_mean_pool
 
-# Assuming these are available from the 'layers' directory
-# Make sure to adjust paths if this were a standalone file.
-# For this context, direct import implies they are accessible within the project structure.
-from layers.cnn_bilstm import CNN_BiLSTM_Encoder  # This is the correct encoder based on parameters provided
-from layers.eeggcn import EEGGCN  #
+from src.layers.cnn_bilstm import CNN_BiLSTM_Encoder
+from src.layers.eeggcn import EEGGCN
 
 
 class LSTM_GNN_Model(nn.Module):
@@ -79,9 +76,7 @@ class LSTM_GNN_Model(nn.Module):
             dropout=gcn_dropout,
         )
 
-    def forward(
-        self, x: torch.Tensor, edge_index: torch.Tensor, batch: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, batch_labels: torch.Tensor) -> torch.Tensor:
         """
         Forward pass of the LSTM-GNN model.
 
@@ -100,23 +95,18 @@ class LSTM_GNN_Model(nn.Module):
         """
         # The input 'x' represents a batch of EEG recordings,
         # where each recording has multiple channels (nodes) and time steps.
-        # x shape: [num_graphs_in_batch, num_channels, time_steps]
-        batch_size, num_channels, time_steps = x.size()
-
-        # Reshape the input to process each channel's time series independently
-        # through the channel_encoder.
-        # New shape: [num_graphs_in_batch * num_channels, time_steps]
-        x_reshaped_for_encoder = x.view(batch_size * num_channels, time_steps)
+        # x shape: [num_graphs_in_batch * num_channels, time_steps]
 
         # Encode each channel's time series into a fixed-size embedding.
         # The output `node_features` will have shape:
         # [num_graphs_in_batch * num_channels, lstm_out_dim]
-        node_features = self.channel_encoder(x_reshaped_for_encoder)
+        node_features = self.channel_encoder(x)
 
         # Pass the extracted node features (embeddings) and the graph structure
         # (edge_index and batch tensors) to the GCN.
         # The `batch` tensor correctly maps the flattened `node_features` back
         # to their respective graphs for aggregation within the GCN.
-        logits = self.gcn(node_features, edge_index, batch)
+        logits = self.gcn(node_features, edge_index, batch_labels)
 
+        # return predictions logits
         return logits
