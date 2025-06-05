@@ -22,7 +22,9 @@ class EEGConvBiLSTM(nn.Module):
         )
         
         # Output: [batch_size, 64, time_samples/4=fs*3]
-        self.rnn = nn.LSTM(input_size=64, hidden_size=output_dim_lstm, batch_first=True)
+        # self.rnn = nn.LSTM(input_size=64, hidden_size=output_dim_lstm, batch_first=True)
+        # NOTE: now using a bidirectional LSTM in order to capture both forward and backward temporal information
+        self.rnn = nn.LSTM(input_size=64, hidden_size=output_dim_lstm, batch_first=True, bidirectional=True)
         # Output: final hidden state -> [1, batch_size, 128]
         #self.fc = nn.Linear(128, 1)
 

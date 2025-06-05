@@ -134,6 +134,7 @@ def train_model(
     wandb_project: Optional[str] = None,  # Wandb project name
     wandb_run_name: Optional[str] = None,  # Wandb run name
     log_wandb: bool = True,  # Whether to log to wandb
+    try_load_checkpoint: bool = True,
 ) -> Tuple[Dict[str, List[float]], Dict[str, List[float]]]:
     """
     Generic training loop.
@@ -197,7 +198,7 @@ def train_model(
     else:
         best_score = -float("inf")
 
-    if save_path.exists() and not overwrite:
+    if save_path.exists() and not overwrite and try_load_checkpoint:
         print(f"🚀 Attempting to load checkpoint from {save_path}...")
         try:
             checkpoint = _load(model, save_path, device, optimizer)
@@ -255,7 +256,7 @@ def train_model(
 
             if use_gnn:
                 curr_batch = data_batch_item.to(device)
-                y_targets = curr_batch.y
+                y_targets = curr_batch.y.reshape(-1, 1)
                 if y_targets is None:
                     logger.warning(f"Batch {batch_idx} has no targets, skipping...")
                     continue
@@ -272,7 +273,6 @@ def train_model(
                                  curr_batch.edge_index,
                                  curr_batch.batch)
                     # unsqueeze y_targets to match the shape of the logits. used later!
-                    y_targets = y_targets.float().unsqueeze(1)
                 except Exception as e:
                     logger.error(f"Error in forward pass for batch {batch_idx}: {str(e)}")
                     logger.error(f"Edge index shape: {curr_batch.edge_index.shape}")
@@ -283,15 +283,14 @@ def train_model(
                     x_batch, y_batch = data_batch_item
                     x_batch = x_batch.to(device)
                     y_targets = y_batch.to(device) if isinstance(y_batch, torch.Tensor) else torch.tensor(y_batch, device=device)
-                    y_targets = y_targets.float().unsqueeze(1) if y_targets.ndim == 1 else y_targets.float()
+                    y_targets = y_targets.reshape(-1, 1)
                     logits = model(x_batch.float())
                 elif hasattr(data_batch_item, 'x') and hasattr(data_batch_item, 'y'):
                     if not to_dense_batch: # Should be caught earlier if PyG not installed but good check
                          raise ImportError("PyTorch Geometric 'to_dense_batch' is required for this non-GNN path if data is PyG Batch.")
                     curr_batch = data_batch_item.to(device)
-                    y_targets = curr_batch.y
+                    y_targets = curr_batch.y.reshape(-1, 1)
                     if y_targets is None: continue
-                    y_targets = y_targets.float().unsqueeze(1)
                     
                     n_channels = 19 # This was hardcoded, consider making it a parameter or inferring
                     assert n_channels > 0, "n_channels must be a positive integer."
@@ -310,22 +309,23 @@ def train_model(
                 else:
                     raise ValueError("Batch data must be a tuple (x, y) or have 'x' and 'y' attributes for non-GNN mode.")
 
-            # the logits are the predictions: % probability of being positive
-            # we need to convert them to binary predictions
-            probs = logits.sigmoid().squeeze()  # [batch_size, 1] -> [batch_size]
-            preds = (probs > 0.5).int()
-            
-            # compute loss
-            loss = criterion(preds, y_targets)
+            # Compute loss on raw logits
+            loss = criterion(logits, y_targets)
             loss.backward()
             if grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
 
+            # convert logits to binary predictions
+            probs = logits.sigmoid().squeeze()  # [batch_size, 1] -> [batch_size]
+
             # store round results
             epoch_train_loss += loss.item()
-            all_train_preds.append(preds.cpu().numpy().ravel())
-            all_train_targets.append(y_targets.int().cpu().numpy().ravel())
+            all_train_preds.append(probs.cpu()) # Store probabilities instead of binary predictions
+            all_train_targets.append(y_targets.squeeze(1).int().cpu()) # shape: (batch_size)
+
+            # assert that all_train_preds and all_train_targets have the same shape
+            assert all_train_preds[0].shape == all_train_targets[0].shape, f"all_train_preds and all_train_targets have different shapes: {all_train_preds[0].shape} != {all_train_targets[0].shape}"
             
             batch_time = time.time() - batch_start_time
             batch_times.append(batch_time)
@@ -364,9 +364,8 @@ def train_model(
             for data_batch_item_val in val_loader: # Use a different variable name
                 if use_gnn:
                     curr_batch = data_batch_item_val.to(device)
-                    y_targets_val = curr_batch.y
-                    if y_targets_val is None: continue
-                    y_targets_val = y_targets_val.float().unsqueeze(1)
+                    y_targets = curr_batch.y.reshape(-1, 1)
+                    if y_targets is None: continue
                     if not (hasattr(curr_batch, 'x') and hasattr(curr_batch, 'edge_index')):
                          raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
                     logits = model(curr_batch.x.float(),
@@ -377,15 +376,14 @@ def train_model(
                         x_batch_val, y_batch_val = data_batch_item_val
                         x_batch_val = x_batch_val.to(device)
                         if y_batch_val is not None:
-                            y_targets_val = y_batch_val.to(device) if isinstance(y_batch_val, torch.Tensor) else torch.tensor(y_batch_val, device=device)
-                            y_targets_val = y_targets_val.float().unsqueeze(1) if y_targets_val.ndim == 1 else y_targets_val.float()
+                            y_targets = y_batch_val.to(device) if isinstance(y_batch_val, torch.Tensor) else torch.tensor(y_batch_val, device=device)
+                            y_targets = y_targets.reshape(-1, 1)
                         else: continue # Skip if no labels in validation
                         logits = model(x_batch_val.float())
                     elif hasattr(data_batch_item_val, 'x') and hasattr(data_batch_item_val, 'y'):
                         curr_batch = data_batch_item_val.to(device)
-                        y_targets_val = curr_batch.y
-                        if y_targets_val is None: continue
-                        y_targets_val = y_targets_val.float().unsqueeze(1)
+                        y_targets = curr_batch.y.reshape(-1, 1)
+                        if y_targets is None: continue
                         
                         n_channels = 19 # This was hardcoded
                         assert n_channels > 0
@@ -404,13 +402,15 @@ def train_model(
                     else:
                         raise ValueError("Val batch data must be a tuple (x, y) or have 'x' and 'y' attributes for non-GNN mode.")
 
+                # compute loss on validation set using raw logits
+                epoch_val_loss += criterion(logits, y_targets).item()
+
                 # Convert logits to binary predictions
                 probs = logits.sigmoid().squeeze()  # [batch_size, 1] -> [batch_size]
-                preds = (probs > 0.5).int()
                 
-                epoch_val_loss += criterion(preds, y_targets_val).item()
-                all_val_preds.append(preds.cpu().numpy().ravel())
-                all_val_targets.append(y_targets_val.int().cpu().numpy().ravel())
+                # store round results
+                all_val_preds.append(probs.cpu()) # Store probabilities instead of binary predictions
+                all_val_targets.append(y_targets.squeeze(1).int().cpu())
         
         avg_val_loss = epoch_val_loss / max(1, len(val_loader))
         val_history['loss'].append(avg_val_loss)
