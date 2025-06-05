@@ -517,7 +517,6 @@ def evaluate_model(
     device: torch.device,
     checkpoint_path: Path, 
     submission_path: Path,
-    id_attribute: str = 'original_clips_df_idx', 
     threshold: float = 0.5,
     use_gnn: bool = True, # Added: For consistency with train_model
     input_type: str = 'signal' # Added: For consistency with train_model (feature, signal, embedding)
@@ -551,7 +550,6 @@ def evaluate_model(
     with torch.no_grad():
         # for batch_data in tqdm(test_loader, desc="Evaluating"):
         for batch_data in test_loader:
-            print(f"BATCH: {batch_data}, feature: {batch_data.x}")
             # Handle different batch formats for device transfer
             if isinstance(batch_data, (tuple, list)):
                 # For tuple/list format, move elements to device individually
@@ -560,21 +558,14 @@ def evaluate_model(
                 # For PyG Batch objects
                 batch_data = batch_data.to(device)
             
-            current_ids = []
             # Handle ID extraction based on batch format
-            if isinstance(batch_data, (tuple, list)):
-                # For tuple/list format from standard DataLoader, use sequential IDs
-                batch_size = batch_data[0].size(0) if len(batch_data) > 0 else 0
-                start_id = len(all_ids)
-                current_ids = list(range(start_id, start_id + batch_size))
-            elif not hasattr(batch_data, id_attribute):
-                print(f"Warning: Batch object missing ID attribute '{id_attribute}'. Using sequential IDs.")
-                num_items_in_batch = batch_data.num_graphs if isinstance(batch_data, PyGBatch) else batch_data.x.size(0)
-                start_id = len(all_ids)
-                current_ids = list(range(start_id, start_id + num_items_in_batch))
+            current_ids = []
+            if not hasattr(batch_data, "id"):
+                raise ValueError(f"Batch object missing ID attribute 'id'.")
+            if isinstance(batch_data.id, torch.Tensor):
+                current_ids.extend(batch_data.id.cpu().tolist())
             else:
-                batch_ids_tensor = getattr(batch_data, id_attribute)
-                current_ids = batch_ids_tensor.cpu().tolist()
+                current_ids.extend(batch_data.id)
 
             if use_gnn:
                 if not (hasattr(batch_data, 'x') and hasattr(batch_data, 'edge_index')):
@@ -639,17 +630,9 @@ def evaluate_model(
                     raise ValueError(f"Unknown input_type: {input_type}. Must be one of ['feature', 'signal', 'embedding'].")
 
             probs = logits.sigmoid().cpu() 
-            
-            if probs.ndim > 1 and probs.shape[1] == 1:
-                probs = probs.squeeze(1)
-            elif probs.ndim == 0: 
-                 probs = probs.unsqueeze(0)
-
             binary_preds = (probs > threshold).int().tolist()
-            
             all_binary_preds.extend(binary_preds)
             all_ids.extend(current_ids)
-
     if not all_ids:
         print("❌ No IDs were collected during evaluation. Cannot create submission file.")
         return pd.DataFrame()
@@ -660,23 +643,14 @@ def evaluate_model(
     if len(all_ids) != len(all_binary_preds):
         print(f"Warning: Mismatch in length of IDs ({len(all_ids)}) and predictions ({len(all_binary_preds)}). Truncating to {min_len}.")
     
+    # create submission dataframe + sort by id to maintain the same order as the test set
     sub_df = pd.DataFrame({"id": all_ids[:min_len], "label": all_binary_preds[:min_len]})
-    
-    try:
-        sub_df['id_numeric'] = pd.to_numeric(sub_df['id'], errors='coerce')
-        if not sub_df['id_numeric'].isna().any(): 
-             sub_df = sub_df.sort_values(by='id_numeric').drop(columns=['id_numeric'])
-        else: 
-             sub_df = sub_df.drop(columns=['id_numeric'])
-             sub_df = sub_df.sort_values(by="id", key=lambda col: col.astype(str)) # Robust string sort
-    except Exception: 
-        print("   ⚠️ Warning: Could not sort submission by ID.")
+    sub_df = sub_df.sort_values(by="id", key=lambda col: col.astype(str)) # Robust string sort
 
-    try:
-        submission_path.parent.mkdir(parents=True, exist_ok=True)
-        sub_df.to_csv(submission_path, index=False)
-        print(f"📄 Saved submission ({len(sub_df)} rows) → {submission_path}")
-    except Exception as e:
-        print(f"❌ Error saving submission file to {submission_path}: {e}")
+    # save submission file
+    submission_path.parent.mkdir(parents=True, exist_ok=True)
+    sub_df.to_csv(submission_path, index=False)
+    print(f"📄 Saved submission ({len(sub_df)} rows) → {submission_path}")
 
+    # return submission dataframe
     return sub_df

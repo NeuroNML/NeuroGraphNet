@@ -121,7 +121,7 @@ class CNN_BiLSTM_Encoder(nn.Module):
 
     def forward(self, x):
         # x: [B, T]
-        x = x.unsqueeze(1)  # [B, 1, 3000
+        x = x.unsqueeze(1)  # [B, 1, 3000]
         lstm_input = self.cnn_path(x).permute(
             0, 2, 1
         )  # Permute output -> [B, 375, 128]

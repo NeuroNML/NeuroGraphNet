@@ -48,6 +48,7 @@ class GraphEEGDataset(Dataset):
         apply_rereferencing: bool = True,
         apply_normalization: bool = True,
         sampling_rate: int = 250,
+        is_test: bool = False,  # New parameter to indicate test mode
     ):
         """
         Custom PyTorch Geometric dataset for EEG data.
@@ -63,6 +64,7 @@ class GraphEEGDataset(Dataset):
             pre_transform: Pre-transform to be applied to each data object
             pre_filter: Pre-filter to be applied to each data object
             sampling_rate: Sampling rate of the EEG data - fixed to 250 Hz
+            is_test (bool): If True, indicates this is a test dataset without labels
         """
         logger.info("Initializing GraphEEGDataset...")
         logger.info(f"Dataset parameters:")
@@ -77,6 +79,7 @@ class GraphEEGDataset(Dataset):
         logger.info(f"  - Apply rereferencing: {apply_rereferencing}")
         logger.info(f"  - Apply normalization: {apply_normalization}")
         logger.info(f"  - Sampling rate: {sampling_rate}")
+        logger.info(f"  - Test mode: {is_test}")
 
         self.root = root
         self.clips = clips
@@ -96,6 +99,7 @@ class GraphEEGDataset(Dataset):
         self.apply_rereferencing = apply_rereferencing
         self.apply_normalization = apply_normalization
         self.sampling_rate = sampling_rate
+        self.is_test = is_test
 
         # EEG channels - standard 10-20 system
         self.channels = [
@@ -205,21 +209,18 @@ class GraphEEGDataset(Dataset):
     def process_embeddings(self):
         """
         Convert precomputed [19, D] embeddings into PyTorch Geometric graph Data objects.
-
-        Args:
-            embeddings (np.ndarray): shape [N, 19, D]
-            labels (np.ndarray): shape [N]
         """
         logger.info("Starting embedding processing...")
         start_time = time.time()
 
         embeddings = np.load(self.embeddings_dir / "embeddings.npy")
-        labels = np.load(self.embeddings_dir / "labels_embeddings.npy")
-        logger.info(f"Loaded embeddings shape: {embeddings.shape}, labels shape: {labels.shape}")
+        if not self.is_test:
+            labels = np.load(self.embeddings_dir / "labels_embeddings.npy")
+            logger.info(f"Loaded embeddings shape: {embeddings.shape}, labels shape: {labels.shape}")
+            assert len(embeddings) == len(labels), "Mismatch between embeddings and labels"
+        else:
+            logger.info(f"Loaded embeddings shape: {embeddings.shape} (test mode - no labels)")
 
-        assert len(embeddings) == len(labels), "Mismatch between embeddings and labels"
-
-        idx = 0
         processed_count = 0
         skipped_count = 0
         
@@ -243,9 +244,16 @@ class GraphEEGDataset(Dataset):
                 skipped_count += 1
                 continue
 
-            y = torch.tensor([labels[i]], dtype=torch.float32)
+            # Get the original id from clips DataFrame
+            original_id = self.clips.iloc[i]['id']
 
-            data = Data(x=x, edge_index=edge_index, y=y)
+            # Create Data object with or without labels
+            if self.is_test:
+                data = Data(x=x, edge_index=edge_index, id=original_id)
+            else:
+                y = torch.tensor([labels[i]], dtype=torch.float32)
+                data = Data(x=x, edge_index=edge_index, y=y, id=original_id)
+
             torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
             processed_count += 1
 
@@ -266,46 +274,35 @@ class GraphEEGDataset(Dataset):
         processed_count = 0
         skipped_count = 0
 
-        for index, segment_signal in enumerate(
-            extracted_features
-        ):  # (samples, extracted_features*electrodes)
+        for index, segment_signal in enumerate(extracted_features):
             if index % 100 == 0:
                 logger.info(f"Processing feature {index+1}/{len(extracted_features)}")
                 
-            segment_signal = segment_signal.reshape(
-                self.n_channels, -1
-            )  # (channels, features)
+            segment_signal = segment_signal.reshape(self.n_channels, -1)
             # Normalize features
             mean = segment_signal.mean(axis=1, keepdims=True)
             std = segment_signal.std(axis=1, keepdims=True) + 1e-6
             segment_signal = (segment_signal - mean) / std
 
-            # ------------------ Create Data object -----------------#
             x = torch.tensor(segment_signal, dtype=torch.float)
-            # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
-
-            # Create edges based on the selected strategy
             edge_index = self._create_edges(segment_signal)
 
             if edge_index.shape == torch.Size([0]):
                 logger.warning(f"Skipping feature {index} - no edges created")
                 self.ids_to_eliminate.append(index)
                 skipped_count += 1
-                continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
+                continue
 
-            # Create label tensor
-            y = torch.tensor(
-                [self.clips["label"].values[index]], dtype=torch.float
-            )  # BCELoss expects float labels
-           
-            # Create Data object
-            data = Data(
-                x=x,  # Node features: channels x time points
-                edge_index=edge_index,  # Edges between channels
-                y=y,  # Label
-            )
+            # Get the original id from clips DataFrame
+            original_id = self.clips.iloc[index]['id']
 
-            # Save processed data
+            # Create Data object with or without labels
+            if self.is_test:
+                data = Data(x=x, edge_index=edge_index, id=original_id)
+            else:
+                y = torch.tensor([self.clips["label"].values[index]], dtype=torch.float)
+                data = Data(x=x, edge_index=edge_index, y=y, id=original_id)
+
             torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
             processed_count += 1
 
@@ -320,10 +317,7 @@ class GraphEEGDataset(Dataset):
         logger.info("Starting session processing...")
         start_time = time.time()
 
-        sessions = list(
-            self.clips.groupby(["patient", "session"])
-        )  # List of tuples: ((patient_id, session_id), session_df)
-
+        sessions = list(self.clips.groupby(["patient", "session"]))
         processed_count = 0
         skipped_count = 0
 
@@ -331,55 +325,40 @@ class GraphEEGDataset(Dataset):
             session_start_time = time.time()
             logger.info(f"Processing session {session_idx+1}/{len(sessions)} (Patient {patient}, Session {session})")
             
-            # Load signal data (for complete session)
             session_signal = pd.read_parquet(
-                f"{self.signal_folder}/{session_df['signals_path'].values[0]}"  # Any 'signal_path' in session_df points to same parquet
+                f"{self.signal_folder}/{session_df['signals_path'].values[0]}"
             )
 
-            # ------------------------- Preprocess signal data ---------------------------#
             session_signal = self._preprocess_signal(session_signal)
             logger.info(f"Preprocessed signal shape: {session_signal.shape}")
 
-            #  ------------ Extract corresponding segments from signal ---------------------#
-
-            for (
-                index,
-                row,
-            ) in session_df.iterrows():  # Each row corresponds to a segment
+            for index, row in session_df.iterrows():
                 if processed_count % 100 == 0:
                     logger.info(f"Processed {processed_count} segments so far")
                     
                 start = int(row["start_time"] * self.sampling_rate)
                 end = int(row["end_time"] * self.sampling_rate)
-                segment_signal = session_signal[
-                    start:end
-                ].T  # Transpose to get channels as rows: (3000 time points,19 channel)->(19,3000)
+                segment_signal = session_signal[start:end].T
 
                 x = torch.tensor(segment_signal, dtype=torch.float)
-                # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
-
-                # Create edges based on the selected strategy
                 edge_index = self._create_edges(segment_signal)
 
                 if edge_index.shape == torch.Size([0]):
                     logger.warning(f"Skipping segment {index} - no edges created")
                     self.ids_to_eliminate.append(index)
                     skipped_count += 1
-                    continue  # Skip if no edges are created - with correlation strategy: happened when all channels are uncorrelated (very rare)
+                    continue
 
-                # Create label tensor
-                y = torch.tensor(
-                    [row["label"]], dtype=torch.float
-                )  # BCELoss expects float labels
+                # Get the original id from the row
+                original_id = row['id']
 
-                # Create Data object
-                data = Data(
-                    x=x,  # Node features: channels x time points
-                    edge_index=edge_index,  # Edges between channels
-                    y=y,  # Label
-                )
+                # Create Data object with or without labels
+                if self.is_test:
+                    data = Data(x=x, edge_index=edge_index, id=original_id)
+                else:
+                    y = torch.tensor([row["label"]], dtype=torch.float)
+                    data = Data(x=x, edge_index=edge_index, y=y, id=original_id)
 
-                # Save processed data
                 torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
                 processed_count += 1
 
