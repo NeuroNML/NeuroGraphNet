@@ -19,7 +19,6 @@ class EEGTimeSeriesDataset(Dataset):
         embeddings_train: bool,
         extracted_features_dir: str,
         selected_features_train: bool,
-        flatten_features: bool, 
         signal_folder: str,
         segment_length: int = 3000,
         apply_rereferencing: bool = True,
