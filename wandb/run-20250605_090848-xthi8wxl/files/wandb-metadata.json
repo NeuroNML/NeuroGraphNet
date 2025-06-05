@@ -1,0 +1,44 @@
+{
+  "os":  "macOS-15.3.2-arm64-arm-64bit-Mach-O",
+  "python":  "CPython 3.13.3",
+  "startedAt":  "2025-06-05T07:08:49.305107Z",
+  "program":  "/Users/lucadibello/Developer/NeuroGraphNet/neuro-eeg-new.ipynb",
+  "codePath":  "neuro-eeg-new.ipynb",
+  "git":  {
+    "remote":  "git@github.com:NeuroNML/NeuroGraphNet.git",
+    "commit":  "dbb0522293514e09b3a7631267f8a6f64feb31fd"
+  },
+  "email":  "lucadibello@proton.me",
+  "root":  "/Users/lucadibello/Developer/NeuroGraphNet",
+  "host":  "Lucas-MacBook-Pro-4.local",
+  "executable":  "/Users/lucadibello/Developer/NeuroGraphNet/.venv/bin/python",
+  "codePathLocal":  "neuro-eeg-new.ipynb",
+  "cpu_count":  12,
+  "cpu_count_logical":  12,
+  "disk":  {
+    "/":  {
+      "total":  "494384795648",
+      "used":  "385723940864"
+    },
+    "/System/Volumes/Data":  {
+      "total":  "494384795648",
+      "used":  "385723940864"
+    }
+  },
+  "memory":  {
+    "total":  "17179869184"
+  },
+  "cpu":  {
+    "count":  12,
+    "countLogical":  12
+  },
+  "apple":  {
+    "name":  "Apple M2 Pro",
+    "ecpuCores":  4,
+    "pcpuCores":  8,
+    "gpuCores":  19,
+    "memoryGb":  16,
+    "swapTotalBytes":  "17179869184",
+    "ramTotalBytes":  "17179869184"
+  }
+}

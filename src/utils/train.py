@@ -6,13 +6,21 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from tqdm import tqdm # type: ignore
+from tqdm import tqdm
 from torchmetrics.functional import accuracy, f1_score, auroc 
 from torch_geometric.utils import to_dense_batch
 from torch.utils.data import WeightedRandomSampler
 
 # Assuming Data and Batch are from PyTorch Geometric if used with GraphEEGDataset
 from torch_geometric.data import Batch as PyGBatch 
+
+# Import wandb with optional fallback
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("Warning: wandb not available. Install with 'pip install wandb' for experiment tracking.") 
 
 
 def _save(
@@ -113,6 +121,10 @@ def train_model(
     overwrite: bool = False,
     use_gnn: bool = True,
     use_oversampling: bool = False, # New parameter for toggling oversampling
+    wandb_config: Optional[Dict[str, Any]] = None,  # Wandb configuration
+    wandb_project: Optional[str] = None,  # Wandb project name
+    wandb_run_name: Optional[str] = None,  # Wandb run name
+    log_wandb: bool = True,  # Whether to log to wandb
 ) -> Tuple[Dict[str, List[float]], Dict[str, List[float]]]:
     """
     Generic training loop.
@@ -120,6 +132,44 @@ def train_model(
     and batch_data is a tuple (input_features, labels).
     If use_gnn=True, it expects PyG Batch objects.
     """
+    # Initialize wandb if requested and available
+    wandb_run = None
+    if log_wandb and WANDB_AVAILABLE:
+        # Prepare wandb config
+        config = {
+            'model_type': 'GNN' if use_gnn else 'Standard',
+            'num_epochs': num_epochs,
+            'patience': patience,
+            'monitor': monitor,
+            'grad_clip': grad_clip,
+            'use_oversampling': use_oversampling,
+            'batch_size': train_loader.batch_size,
+            'optimizer': type(optimizer).__name__,
+            'lr': optimizer.param_groups[0]['lr'],
+            'scheduler': type(scheduler).__name__ if scheduler else None,
+        }
+        
+        # Add user-provided config
+        if wandb_config:
+            config.update(wandb_config)
+            
+        try:
+            wandb_run = wandb.init(
+                project=wandb_project or "neuro-graph-net",
+                name=wandb_run_name,
+                config=config,
+                reinit=True
+            )
+            # Watch the model for gradient and parameter tracking
+            wandb.watch(model, log='all', log_freq=100)
+            print(f"🔗 Wandb initialized: {wandb.run.name}")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not initialize wandb: {e}")
+            log_wandb = False
+    elif log_wandb and not WANDB_AVAILABLE:
+        print("⚠️ Warning: wandb logging requested but wandb not available")
+        log_wandb = False
+    
     start_epoch = 0
     train_history = defaultdict(list)
     val_history = defaultdict(list)
@@ -398,6 +448,27 @@ def train_model(
             val_history['acc'].append(0.0); val_history['f1'].append(0.0); val_history['auroc'].append(0.0)
             # current_score_val remains avg_val_loss
 
+        # Log metrics to wandb
+        if log_wandb and wandb_run:
+            wandb_metrics = {
+                'epoch': epoch,
+                'train/loss': train_history['loss'][-1] if train_history['loss'] else 0.0,
+                'train/accuracy': train_history['acc'][-1] if train_history['acc'] else 0.0,
+                'train/f1': train_history['f1'][-1] if train_history['f1'] else 0.0,
+                'train/auroc': train_history['auroc'][-1] if train_history['auroc'] else 0.0,
+                'val/loss': val_history['loss'][-1] if val_history['loss'] else 0.0,
+                'val/accuracy': val_history['acc'][-1] if val_history['acc'] else 0.0,
+                'val/f1': val_history['f1'][-1] if val_history['f1'] else 0.0,
+                'val/auroc': val_history['auroc'][-1] if val_history['auroc'] else 0.0,
+                'learning_rate': optimizer.param_groups[0]['lr'],
+                'bad_epochs': bad_epochs,
+                f'best_{monitor}': best_score,
+            }
+            try:
+                wandb.log(wandb_metrics)
+            except Exception as e:
+                print(f"⚠️ Warning: Could not log to wandb: {e}")
+
         improved = False
         if monitor in ["val_loss", "loss"]:
             if current_score_val < best_score:
@@ -439,13 +510,39 @@ def train_model(
     pbar.close()
     print("\n✅ Training complete.")
     
+    # Log final results to wandb
+    if log_wandb and wandb_run:
+        try:
+            # Log final summary metrics
+            wandb.summary[f"final_best_{monitor}"] = best_score
+            wandb.summary["final_epoch"] = epoch if 'epoch' in locals() else num_epochs
+            wandb.summary["total_bad_epochs"] = bad_epochs
+            
+            # Save model artifact if training completed successfully
+            if save_path.exists():
+                artifact = wandb.Artifact("best_model", type="model")
+                artifact.add_file(str(save_path))
+                wandb.log_artifact(artifact)
+                print(f"📁 Model artifact saved to wandb: {save_path}")
+            
+        except Exception as e:
+            print(f"⚠️ Warning: Could not save final results to wandb: {e}")
+    
     if save_path.exists():
         print(f"↩️ Loading best model state from {save_path} for return.")
         # Load only model weights, not optimizer or epoch for the final returned model
-        final_checkpoint = torch.load(save_path, map_location=device)
+        final_checkpoint = torch.load(save_path, map_location=device, weights_only=False)
         model.load_state_dict(final_checkpoint['model_state_dict'])
     else:
         print(" ⚠️ No checkpoint was saved during training (or an error occurred). Model reflects last epoch state.")
+
+    # Finish wandb run
+    if log_wandb and wandb_run:
+        try:
+            wandb.finish()
+            print("🔗 Wandb run finished")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not finish wandb run: {e}")
 
     return dict(train_history), dict(val_history)
 

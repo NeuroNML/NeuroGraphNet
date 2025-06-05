@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-echo "Exporting conda environment to environment.yml"
-conda env export -n neuro --no-builds > environment.yml
-echo "Done."

@@ -441,7 +441,12 @@ class TimeseriesEEGDataset(Dataset):
         except FileNotFoundError:
             raise FileNotFoundError(f"Cached file not found: {file_path}")
         except Exception as e:
-            raise RuntimeError(f"Error loading cached file {file_path}: {e}")
+            # Handle PyTorch 2.6+ weights_only error
+            if "weights_only" in str(e).lower():
+                data = torch.load(file_path, weights_only=False)
+                return data
+            else:
+                raise RuntimeError(f"Error loading cached file {file_path}: {e}")
     
     def _save_processed_item(self, x: torch.Tensor, y: Optional[torch.Tensor], idx: int):
         """Save a processed item to disk."""
@@ -509,7 +514,14 @@ class TimeseriesEEGDataset(Dataset):
         for i in range(self._processed_items_count):
             try:
                 file_path = osp.join(self.processed_dir, f'{self._current_file_prefix}{i}.pt')
-                self._data_list[i] = torch.load(file_path)
+                try:
+                    self._data_list[i] = torch.load(file_path)
+                except Exception as e:
+                    # Handle PyTorch 2.6+ weights_only error
+                    if "weights_only" in str(e).lower():
+                        self._data_list[i] = torch.load(file_path, weights_only=False)
+                    else:
+                        raise
                 prefetched_count += 1
                 
                 if (i + 1) % log_interval == 0 or i == self._processed_items_count - 1:
