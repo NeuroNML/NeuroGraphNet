@@ -76,15 +76,16 @@ class EEGCNN(nn.Module):
 
 # Bi-LSTM
 class EEGBiLSTM(nn.Module):
-    def __init__(self, hidden_dim=64, out_dim=64, dropout=0.25, input_size=128): # Inpot size fixed to ouput of CNN
+    def __init__(self, hidden_dim=64, out_dim=64, dropout=0.25, input_size=128, num_layers=1):
         super().__init__()
 
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_dim,
+            num_layers=num_layers,
             batch_first=True,
             bidirectional=True,
-            dropout=dropout
+            dropout=dropout if num_layers > 1 else 0  # NOTE: Only apply dropout if we have multiple layers
         )
 
         self.project = nn.Sequential(
@@ -93,7 +94,6 @@ class EEGBiLSTM(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-
         x, _ = self.lstm(x)  # [B, T, 2H] -> Each 'time step' gets two hidden vectors
         x = x[:, -1, :]  # Single vector per node -> summary representation
         x = self.project(x)  # Reduce by half and apply Relu -> [B, H]
@@ -109,6 +109,7 @@ class CNN_BiLSTM_Encoder(nn.Module):
         lstm_hidden_dim=64,
         lstm_out_dim=64,
         lstm_dropout=0.25,
+        num_layers=1,
     ):
         super().__init__()
         self.cnn_path = EEGCNN(dropout=cnn_dropout)
@@ -116,8 +117,8 @@ class CNN_BiLSTM_Encoder(nn.Module):
             hidden_dim=lstm_hidden_dim,
             out_dim=lstm_out_dim,
             dropout=lstm_dropout,
+            num_layers=num_layers,
         )
-
 
     def forward(self, x):
         # x: [B, T]
@@ -126,5 +127,4 @@ class CNN_BiLSTM_Encoder(nn.Module):
             0, 2, 1
         )  # Permute output -> [B, 375, 128]
         embedding = self.lstm_path(lstm_input)
-
         return embedding

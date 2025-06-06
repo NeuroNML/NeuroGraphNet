@@ -25,6 +25,7 @@ class LSTM_GNN_Model(nn.Module):
         lstm_hidden_dim: int = 64,
         lstm_out_dim: int = 64,  # This will be the time_encoder_output_dim for the GCN
         lstm_dropout: float = 0.25,
+        num_layers: int = 1,
         # Parameters for the EEGGCN (graph neural network)
         gcn_hidden_channels: int = 64,
         gcn_out_channels: int = 32,
@@ -42,6 +43,7 @@ class LSTM_GNN_Model(nn.Module):
             lstm_out_dim (int): Output feature dimension from the LSTM part of the temporal encoder.
                                 This also serves as the input dimension for the GCN.
             lstm_dropout (float): Dropout probability for the LSTM part of the temporal encoder.
+            num_layers (int): Number of layers in the CNN_BiLSTM_Encoder.
             gcn_hidden_channels (int): Number of hidden units in the GCN layers.
             gcn_out_channels (int): Output feature dimensions from the last GCN layer before final classification.
             num_gcn_layers (int): Number of GCN convolutional layers.
@@ -62,6 +64,7 @@ class LSTM_GNN_Model(nn.Module):
             lstm_hidden_dim=lstm_hidden_dim,
             lstm_out_dim=lstm_out_dim,
             lstm_dropout=lstm_dropout,
+            num_layers=num_layers,
         )
 
         # Initialize the Graph Convolutional Network.
