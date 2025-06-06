@@ -671,7 +671,8 @@ def evaluate_model(
                     raise ValueError(f"Unknown input_type: {input_type}. Must be one of ['feature', 'signal', 'embedding'].")
 
             probs = logits.sigmoid().cpu() 
-            binary_preds = (probs > threshold).int().tolist()
+            # Flatten the binary predictions to get single integers instead of lists
+            binary_preds = (probs > threshold).int().flatten().tolist()
             all_binary_preds.extend(binary_preds)
             all_ids.extend(current_ids)
     if not all_ids:
