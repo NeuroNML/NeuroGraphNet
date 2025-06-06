@@ -37,7 +37,7 @@ fi
 conda activate "$ENV_NAME"
 
 # Install PyTorch Geometric packages
-pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f "$PYG_URL"
+pip install torch-scatter torch-sparse torch-cluster torch-spline-conv torch-geometric -f "$PYG_URL"
 
 # Test install
 python -c "import torch; import torch_geometric; print('Torch version:', torch.__version__)"

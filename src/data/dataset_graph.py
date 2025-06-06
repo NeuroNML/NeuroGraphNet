@@ -18,6 +18,7 @@ from src.utils.preprocessing_funcs import time_filtering
 from src.utils.general_funcs import log
 
 
+
 class GraphEEGDataset(Dataset):
     def __init__(
         self,
@@ -204,17 +205,14 @@ class GraphEEGDataset(Dataset):
         """
         Processes extracted features from samples into PyTorch Geometric Data objects.
         """
-        extracted_features = np.load(self.extracted_features_dir / "X_train_DE.npy")
+        extracted_features = np.load(self.extracted_features_dir / "X_significant_train.npy")  # (N, channels, features)
         idx = 0
         for index, segment_signal in enumerate(
             extracted_features
-        ):  # (samples, extracted_features*electrodes)
-            segment_signal = segment_signal.reshape(
-                self.n_channels, -1
-            )  # (channels, features)
+        ):  
             # Normalize features
-            mean = segment_signal.mean(axis=1, keepdims=True)
-            std = segment_signal.std(axis=1, keepdims=True) + 1e-6
+            mean = segment_signal.mean(axis=0, keepdims=True)
+            std = segment_signal.std(axis=0, keepdims=True) + 1e-6
             segment_signal = (segment_signal - mean) / std
 
             # ------------------ Create Data object -----------------#
@@ -274,7 +272,7 @@ class GraphEEGDataset(Dataset):
                 segment_signal = session_signal[
                     start:end
                 ].T  # Transpose to get channels as rows: (3000 time points,19 channel)->(19,3000)
-
+        
                 x = torch.tensor(segment_signal, dtype=torch.float)
                 # Creates a tensor -> graph: each node = 1 EEG channel, and its feature = the full time series
 

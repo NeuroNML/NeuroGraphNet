@@ -44,6 +44,7 @@ def main():
         project="eeg-seizure",
         config=OmegaConf.to_container(config, resolve=True),
         name=run_name,
+        
     )
 
     log("wandb login successful")
@@ -56,6 +57,10 @@ def main():
 
     # ------------- Prepare training data -----------------#
     clips_df = clips_df[~clips_df.label.isna()].reset_index()
+    #  Outliers
+    #outliers = np.load(DATA_ROOT/ "outlier_mask.npy")
+    #clips_df = clips_df[~outliers].reset_index(drop=True)
+
 
 
     dataset = EEGTimeSeriesDataset(
@@ -243,7 +248,7 @@ def main():
     # Create a figure for the confusion matrix
     fig, ax = plt.subplots(figsize=(6, 6))
     disp.plot(ax=ax, cmap="Blues", colorbar=False)
-    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}), F1-score: {best_val_f1:.3f})")
+    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}, F1-score: {best_val_f1:.3f})")
     # Log to W&B
     wandb.log({"best_confusion_matrix": wandb.Image(fig)})
     plt.close(fig)

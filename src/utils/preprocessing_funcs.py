@@ -8,6 +8,11 @@ import matplotlib.pyplot as plt
 
 from scipy import signal
 from scipy.signal import welch
+from scipy.stats import skew, kurtosis, entropy
+from scipy.linalg import toeplitz
+from scipy.signal import stft
+import pywt
+
 
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.preprocessing import RobustScaler
@@ -57,7 +62,7 @@ def time_filtering(x, bp_filter, notch_filter):
     return x_filt.copy()
 
 
-def spectral_entropy(psd):
+def spectral_entropy(psd): # Shannon entropy
     """Spectral entropy of a power‐spectral density array."""
     psd_sum = psd.sum()
     p_norm = psd / (psd_sum + 1e-12)  # avoid /0
@@ -180,6 +185,232 @@ def extract_features(signal, fs=250):
     return features
 
 
+# ----------------------------- Function to extract features per window --------------------------#
+
+def bandpower(psd, freqs, band):
+    mask = (freqs >= band[0]) & (freqs < band[1])
+    return np.trapz(psd[mask], freqs[mask])
+
+
+def extract_power_features_window(signal, fs=250):
+    bands = {
+        "theta": (4, 8),
+        "alpha": (8, 13),
+        "gamma": (30, 50),
+    }
+
+    n_channels = signal.shape[0]
+    features = []
+
+    for ch in range(n_channels):
+        x = signal[ch]
+
+        # Welch PSD
+        f, psd = welch(x, fs=fs, nperseg=len(x))
+
+        # Band powers
+        theta_pow = bandpower(psd, f, bands["theta"])
+        alpha_pow = bandpower(psd, f, bands["alpha"])
+        gamma_pow = bandpower(psd, f, bands["gamma"])
+
+        # Spectral entropy
+        spec_ent = spectral_entropy(psd)
+
+        ch_feats = [theta_pow, alpha_pow, gamma_pow, spec_ent]
+        features.extend(ch_feats)
+
+    return np.array(features, dtype=float)
+
+
+def compute_bispectrum(x, fs, nfft=250):
+    f, t, Zxx = stft(x, fs=fs, nperseg=nfft)
+    S = Zxx.mean(axis=1)
+    S_conj = np.conj(S)
+    B = np.zeros((len(f), len(f)), dtype=complex)
+    for i in range(len(f)):
+        for j in range(len(f)):
+            k = i + j
+            if k < len(f):
+                B[i, j] = S[i] * S[j] * S_conj[k]
+    return B, f
+
+def weighted_mean(arr):
+    weights = np.arange(1, len(arr) + 1)
+    return np.average(arr, weights=weights)
+
+def weighted_variance(arr):
+    weights = np.arange(1, len(arr) + 1)
+    mean = np.average(arr, weights=weights)
+    return np.average((arr - mean) ** 2, weights=weights)
+
+def extract_bispectrum_window(signal, fs=250):
+    bands = {
+        "theta": (4, 8),
+        "alpha": (8, 13),
+        "delta": (0.5, 4),
+        "beta":  (13, 30),
+        "gamma": (30, 50),
+    }
+
+    n_channels = signal.shape[1]
+    features = []
+
+    for ch in range(n_channels):
+        x = signal[:, ch]
+        B, f_bi = compute_bispectrum(x, fs=fs)
+        B = np.abs(B)
+        ch_feats = []
+
+        for band, (lo, hi) in bands.items():
+            band_mask = (f_bi >= lo) & (f_bi < hi)
+            B_band = B[np.ix_(band_mask, band_mask)]
+            diag = np.diag(B_band)
+
+            log_diag_energy = np.sum(np.log(diag + 1e-12))
+            log_energy = np.sum(np.log(B_band + 1e-12))
+
+            if band == "theta":
+                ch_feats.extend([log_diag_energy, log_energy])
+            elif band == "delta":
+                ch_feats.extend([log_energy, log_diag_energy])
+            elif band == "alpha":
+                entropy_ = entropy(diag / (np.sum(diag) + 1e-12))
+                ch_feats.extend([log_diag_energy, log_energy, entropy_])
+            elif band == "beta":
+                ch_feats.append(log_energy)
+            elif band == "gamma":
+                diag_wvar = weighted_variance(diag)
+                diag_wmean = weighted_mean(diag)
+                entropy_ = entropy(diag / (np.sum(diag) + 1e-12))
+                quad_entropy = -np.sum((diag**2 / (np.sum(diag**2) + 1e-12)) * np.log(diag**2 / (np.sum(diag**2) + 1e-12) + 1e-12))
+                ch_feats.extend([log_energy, log_diag_energy, diag_wvar, diag_wmean, entropy_, quad_entropy])
+
+        features.extend(ch_feats)
+
+    return np.array(features, dtype=float)
+
+
+def extract_de_window_features(signal, fs=250):
+    """
+    Extract Differential Entropy (DE) features per band per channel.
+
+    Returns:
+    - 1D feature vector: (n_channels × n_bands) DE features
+    """
+    features = []
+    bands = {
+ 
+        "theta": (4, 8),
+        "alpha": (8, 13),
+        "beta": (13, 30),
+        "gamma": (30, 50),
+    }
+
+    for ch in range(signal.shape[1]):
+        x = signal[:, ch]
+        freqs, psd = welch(x, fs=fs, nperseg=2 * fs)
+
+        for name, (lo, hi) in bands.items():
+            idx = (freqs >= lo) & (freqs < hi)
+            band_psd = psd[idx]
+
+            # Compute band power (integral of PSD over band)
+            band_power = np.trapz(band_psd, freqs[idx])
+
+            # DE assumes Gaussian: DE = 0.5 * log(2πeσ²)
+            # σ² is approximated from band power
+            sigma_sq = band_power
+            de = 0.5 * np.log(2 * np.pi * np.e * (sigma_sq + 1e-12))
+
+            features.append(de)
+
+
+    return np.asarray(features, dtype=float)
+
+
+def extract_wavelet_window_features(signal, fs=250):
+    bands = {
+        "delta": (0.5, 4),
+        "theta": (4, 8),
+        "alpha": (8, 13),
+        "gamma": (30, 50),
+    }
+
+    n_channels = signal.shape[1]
+    features = []
+
+    for ch in range(n_channels):
+        x = signal[:, ch]
+        coeffs, freqs = pywt.cwt(
+            x, scales=np.arange(1, 128), wavelet="morl", sampling_period=1 / fs
+        )
+        power = np.abs(coeffs) ** 2
+        ch_feats = []
+
+        for band, (lo, hi) in bands.items():
+            if band not in ["theta", "delta", "alpha", "gamma"]:
+                continue
+
+            band_mask = (freqs >= lo) & (freqs < hi)
+            band_power = power[band_mask, :].mean(axis=0)
+
+            if band == "theta":
+                ch_feats.extend([skew(band_power), kurtosis(band_power)])
+            elif band == "delta":
+                ch_feats.extend([
+                    skew(band_power), kurtosis(band_power),
+                    np.std(band_power), np.mean(band_power)
+                ])
+            elif band == "alpha":
+                ch_feats.extend([
+                    skew(band_power), kurtosis(band_power),
+                    np.mean(band_power),
+                    entropy(np.abs(band_power) / (np.sum(np.abs(band_power)) + 1e-12))
+                ])
+            elif band == "gamma":
+                ch_feats.extend([
+                    skew(band_power), np.std(band_power)
+                ])
+
+        features.extend(ch_feats)
+
+    return np.array(features, dtype=float)
+
+def extract_window_features(signal, fs=250):
+    bispec_feats = extract_bispectrum_window(signal, fs)
+    de_feats = extract_de_window_features(signal, fs)
+    wavelet_feats = extract_wavelet_window_features(signal, fs)
+    power_feats =  extract_power_features_window(signal, fs)
+    linelen =  np.sum(np.abs(np.diff(signal, axis=1)), axis=1, keepdims=True) # Linelength per channel
+
+    all_feats = np.concatenate([bispec_feats, de_feats, wavelet_feats, power_feats, linelen], axis=1)
+    return all_feats  # shape: (n_channels, total_features)
+
+
+def extract_features_over_windows(segment, fs=250, window_size=1.0, overlap=0.5):
+    """
+    eeg_segment: np.ndarray of shape (n_channels, total_samples)
+    Returns: np.ndarray of shape (n_windows, n_features_per_window)
+    """
+    window_len = int(window_size * fs)
+    overlap_len = int(overlap * fs)
+    step = window_len - overlap_len
+    n_channels, total_len = segment.shape
+
+    features_per_window = []
+
+    for start in range(0, total_len - window_len + 1, step):
+        window = segment[:, start:start + window_len]
+        feat_vec = extract_window_features(window, fs=fs)
+        features_per_window.append(feat_vec)
+
+    features_per_window = np.stack(features_per_window)  # shape: (n_windows, n_channels, n_features)
+    features_per_window = np.transpose(features_per_window, (1, 0, 2))  # -> (n_channels, n_windows, n_features)
+    return features_per_window
+
+
+
+
 # ---------------------- Function to process one session to extract features -------------------------------#
 
 
@@ -211,7 +442,8 @@ def process_session(session_df, signal_path, bp_filter, notch_filter, f_s=250):
         t0 = int(row["start_time"] * f_s)
         tf = int(row["end_time"] * f_s)
         segment = session_signal[t0:tf]
-        features = extract_de_features(segment)
+        #features = extract_de_features(segment)
+        features = extract_features_over_windows(segment) # 
         features_list.append(features)
 
     return features_list
@@ -301,3 +533,6 @@ def model_evaluation(
         plt.show()
 
     return f1_scores.mean(), f1_scores.std()
+
+
+

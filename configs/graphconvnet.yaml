@@ -9,12 +9,12 @@ learning_rate: 0.005
 weight_decay: 0.001
 epochs: 200
 seed: 42
-oversampling_power: 0.5
+oversampling_power: 0.8
 
 embeddings: False
 selected_features:  False
 edge_strategy: correlation
-top_k :  19
+top_k :  2
 correlation_threshold: False
 low_bandpass_frequency: 0.5
 high_bandpass_frequency: 50

@@ -1,0 +1,23 @@
+model:
+  type: gcn_bilstm
+  name: GCN_LSTM
+  params:
+    dropout: 0.2
+    bidirectional: True
+   
+
+
+batch_size: 64
+learning_rate: 0.0005
+weight_decay: 0.0001
+epochs: 200
+seed: 42
+oversampling_power: 0.6
+
+embeddings: False
+selected_features:  False
+edge_strategy: correlation
+top_k :  3
+correlation_threshold: False
+low_bandpass_frequency: 0.5
+high_bandpass_frequency: 50

@@ -100,7 +100,7 @@ def main():
         ),
         top_k=config.top_k,
         correlation_threshold=config.correlation_threshold,
-        force_reprocess=True,
+        force_reprocess=False,
         bandpass_frequencies=(
             config.low_bandpass_frequency,
             config.high_bandpass_frequency,
@@ -246,12 +246,12 @@ def main():
                 all_labels.extend(
                     batch.y.int().cpu().numpy().ravel()
                 )  # Labels: stored as float in dataset
-                log(f"Val logits stats — min: {out.min().item():.4f}, max: {out.max().item():.4f}, mean: {out.mean().item():.4f}, std: {out.std().item():.4f}")
+                #log(f"Val logits stats — min: {out.min().item():.4f}, max: {out.max().item():.4f}, mean: {out.mean().item():.4f}, std: {out.std().item():.4f}")
 
 
-                log(f"Predictions:{preds.cpu().numpy()}")
+                #log(f"Predictions:{preds.cpu().numpy()}")
                 log(f"Sigmoid outputs: { torch.sigmoid(out).detach().cpu().numpy()}")
-                log(f"Labels:{batch.y}")
+                #log(f"Labels:{batch.y}")
                 
 
 
@@ -261,11 +261,13 @@ def main():
 
         all_labels = np.array(all_labels).astype(int)
         all_preds = np.array(all_preds).astype(int)
-        all_probs = np.array(all_probs).astype(int)
+        all_probs = np.array(all_probs)
 
+        
         for name, param in model.named_parameters():
             if param.grad is not None:
                 log(f"{name} grad mean: {param.grad.abs().mean()}")
+        
 
        
         val_auc = roc_auc_score(all_labels, all_probs)
@@ -335,7 +337,7 @@ def main():
     # Create a figure for the confusion matrix
     fig, ax = plt.subplots(figsize=(6, 6))
     disp.plot(ax=ax, cmap="Blues", colorbar=False)
-    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}), F1-score: {best_val_f1:.3f})")
+    ax.set_title(f"Best Confusion Matrix (Epoch {best_val_f1_epoch}, F1-score: {best_val_f1:.3f})")
     # Log to W&B
     wandb.log({"best_confusion_matrix": wandb.Image(fig)})
     plt.close(fig)
