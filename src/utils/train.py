@@ -318,6 +318,11 @@ def train_model(
 
             # convert logits to binary predictions
             probs = logits.sigmoid().squeeze()  # [batch_size, 1] -> [batch_size]
+            
+            # Validate probability ranges
+            if torch.any(probs < 0) or torch.any(probs > 1):
+                logger.warning(f"Batch {batch_idx}: Probabilities outside [0,1] range detected. Clamping values.")
+                probs = torch.clamp(probs, 0, 1)
 
             # store round results
             epoch_train_loss += loss.item()
@@ -346,12 +351,27 @@ def train_model(
             preds_cat_train = torch.cat(all_train_preds)
             targets_cat_train = torch.cat(all_train_targets).int()
             try:
-                train_history['acc'].append(accuracy(preds_cat_train, targets_cat_train, task="binary").item())
-                train_history['f1'].append(f1_score(preds_cat_train, targets_cat_train, task="binary").item())
+                # Compute metrics with explicit threshold
+                threshold = 0.5
+                binary_preds = (preds_cat_train > threshold).int()
+                
+                # Accuracy and F1 on binary predictions
+                train_history['acc'].append(accuracy(binary_preds, targets_cat_train, task="binary").item())
+                train_history['f1'].append(f1_score(binary_preds, targets_cat_train, task="binary").item())
+                
+                # AUROC on probabilities
                 train_history['auroc'].append(auroc(preds_cat_train, targets_cat_train, task="binary").item())
+                
+                # Log metric values for debugging
+                logger.debug(f"Epoch {epoch} metrics - Acc: {train_history['acc'][-1]:.4f}, F1: {train_history['f1'][-1]:.4f}, AUROC: {train_history['auroc'][-1]:.4f}")
             except ValueError as e:
-                print(f"Warning (Train Metrics, Epoch {epoch}): {e}. Appending 0.0 for metrics.")
-                train_history['acc'].append(0.0); train_history['f1'].append(0.0); train_history['auroc'].append(0.0)
+                logger.error(f"Error computing metrics (Epoch {epoch}): {str(e)}")
+                logger.error(f"Preds shape: {preds_cat_train.shape}, Targets shape: {targets_cat_train.shape}")
+                logger.error(f"Preds range: [{preds_cat_train.min():.4f}, {preds_cat_train.max():.4f}]")
+                logger.error(f"Targets unique values: {torch.unique(targets_cat_train).tolist()}")
+                train_history['acc'].append(0.0)
+                train_history['f1'].append(0.0)
+                train_history['auroc'].append(0.0)
         else: # Handles empty train_loader_to_iterate or if all batches were skipped
              train_history['acc'].append(0.0); train_history['f1'].append(0.0); train_history['auroc'].append(0.0)
 
@@ -408,6 +428,11 @@ def train_model(
                 # Convert logits to binary predictions
                 probs = logits.sigmoid().squeeze()  # [batch_size, 1] -> [batch_size]
                 
+                # Validate probability ranges
+                if torch.any(probs < 0) or torch.any(probs > 1):
+                    logger.warning(f"Batch {batch_idx}: Probabilities outside [0,1] range detected. Clamping values.")
+                    probs = torch.clamp(probs, 0, 1)
+
                 # store round results
                 all_val_preds.append(probs.cpu()) # Store probabilities instead of binary predictions
                 all_val_targets.append(y_targets.squeeze(1).int().cpu())
@@ -420,20 +445,36 @@ def train_model(
             preds_cat_val = torch.cat(all_val_preds)
             targets_cat_val = torch.cat(all_val_targets).int()
             try:
-                val_acc = accuracy(preds_cat_val, targets_cat_val, task="binary").item()
-                val_f1 = f1_score(preds_cat_val, targets_cat_val, task="binary").item()
+                # Compute metrics with explicit threshold
+                threshold = 0.5
+                binary_preds = (preds_cat_val > threshold).int()
+                
+                # Accuracy and F1 on binary predictions
+                val_acc = accuracy(binary_preds, targets_cat_val, task="binary").item()
+                val_f1 = f1_score(binary_preds, targets_cat_val, task="binary").item()
+                
+                # AUROC on probabilities
                 val_auroc = auroc(preds_cat_val, targets_cat_val, task="binary").item()
+                
                 val_history['acc'].append(val_acc)
                 val_history['f1'].append(val_f1)
                 val_history['auroc'].append(val_auroc)
+
+                # Log metric values for debugging
+                logger.debug(f"Epoch {epoch} validation metrics - Acc: {val_acc:.4f}, F1: {val_f1:.4f}, AUROC: {val_auroc:.4f}")
 
                 if monitor == "val_auroc": current_score_val = val_auroc
                 elif monitor == "val_f1": current_score_val = val_f1
                 elif monitor == "val_acc": current_score_val = val_acc
                 # else monitor is "val_loss", already set
             except ValueError as e:
-                print(f"Warning (Validation Metrics, Epoch {epoch}): {e}. Using val_loss for monitoring.")
-                val_history['acc'].append(0.0); val_history['f1'].append(0.0); val_history['auroc'].append(0.0)
+                logger.error(f"Error computing validation metrics (Epoch {epoch}): {str(e)}")
+                logger.error(f"Preds shape: {preds_cat_val.shape}, Targets shape: {targets_cat_val.shape}")
+                logger.error(f"Preds range: [{preds_cat_val.min():.4f}, {preds_cat_val.max():.4f}]")
+                logger.error(f"Targets unique values: {torch.unique(targets_cat_val).tolist()}")
+                val_history['acc'].append(0.0)
+                val_history['f1'].append(0.0)
+                val_history['auroc'].append(0.0)
                 # current_score_val remains avg_val_loss
         else: # Handles empty val_loader or if all batches were skipped
             val_history['acc'].append(0.0); val_history['f1'].append(0.0); val_history['auroc'].append(0.0)
