@@ -1,13 +1,12 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.nn import global_mean_pool
 
 from src.layers.cnn_bilstm import CNN_BiLSTM_Encoder
-from src.layers.eeggcn import EEGGCN
+from src.layers.gnn.gcn import EEGGCN
+from src.layers.hybrid.cnn_bilstm import EEGCNNBiLSTMEncoder
 
 
-class LSTM_GNN_Model(nn.Module):
+class EEGCNNBiLSTMGNN(nn.Module):
     """
     Hybrid model combining a CNN-BiLSTM encoder for temporal feature extraction
     per EEG channel and a Graph Convolutional Network (GCN) for spatial feature integration.
@@ -35,7 +34,7 @@ class LSTM_GNN_Model(nn.Module):
         num_channels: int = 19,  # Number of EEG channels
     ):
         """
-        Initializes the LSTM_GNN_Model.
+        Initializes the EEGCNNBiLSTMGNN.
 
         Args:
             cnn_dropout (float): Dropout probability for the CNN part of the temporal encoder.

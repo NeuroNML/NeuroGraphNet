@@ -5,7 +5,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class EEG1DCNNEncoder(nn.Module):
+class EEGCNNEncoder(nn.Module):
+    """
+    CNN Encoder for EEG signal processing.
+    """
     def __init__(self, out_dim=128):
         super().__init__()
         self.conv1 = nn.Conv1d(1, 32, kernel_size=7, padding=3)
@@ -44,7 +47,10 @@ class EEG1DCNNEncoder(nn.Module):
         return x
 
 
-class EEG1DCNNE(nn.Module):
+class EEGCNN(nn.Module):
+    """
+    CNN model for EEG signal processing.
+    """
     def __init__(self, out_dim=128,  input_timesteps=3000):
         super().__init__()
         

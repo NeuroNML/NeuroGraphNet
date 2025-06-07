@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, List, Tuple
 
-class FeatureAttention(nn.Module):
+class EEGFeatureAttention(nn.Module):
     """Attention mechanism for feature importance weighting"""
     def __init__(self, input_dim: int, attention_dim: Optional[int] = None, scale_factor: float = 0.1):
         super().__init__()
@@ -23,7 +23,7 @@ class FeatureAttention(nn.Module):
         weighted_features = x * (1.0 + attention_weights)  # Additive attention instead of multiplicative
         return weighted_features, attention_weights
 
-class FeatureBlock(nn.Module):
+class EEGFeatureBlock(nn.Module):
     """A block of layers for feature processing with residual connection"""
     def __init__(self, in_features: int, out_features: int, dropout: float = 0.3):
         super().__init__()
@@ -38,7 +38,7 @@ class FeatureBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.block(x) + self.shortcut(x)
 
-class FeatureNet(nn.Module):
+class EEGFeatureNet(nn.Module):
     """
     A deep neural network specifically designed for seizure detection using extracted features.
     Architecture:
@@ -58,13 +58,13 @@ class FeatureNet(nn.Module):
         super().__init__()
         
         # Feature attention layer
-        self.feature_attention = FeatureAttention(input_dim, attention_dim, scale_factor=attention_scale)
+        self.feature_attention = EEGFeatureAttention(input_dim, attention_dim, scale_factor=attention_scale)
         
         # Feature processing blocks
         self.feature_blocks = nn.ModuleList()
         prev_dim = input_dim
         for hidden_dim in hidden_dims:
-            self.feature_blocks.append(FeatureBlock(prev_dim, hidden_dim, dropout))
+            self.feature_blocks.append(EEGFeatureBlock(prev_dim, hidden_dim, dropout))
             prev_dim = hidden_dim
         
         # Final classification layer - removed BatchNorm

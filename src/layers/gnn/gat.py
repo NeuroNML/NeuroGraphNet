@@ -18,19 +18,10 @@ class EEGGAT(nn.Module):
 
     def forward(self, x, edge_index, batch):
         x = self.gat1(x, edge_index)
-        print(f"After GAT 1")
-        print(f"mean: {x.mean().item():.4f}, std: {x.std().item():.4f}")
         x = F.elu(x)
         x = self.dropout(x)
         x = self.gat2(x, edge_index)
-        print(f"After GAT 2")
-        print(f"mean: {x.mean().item():.4f}, std: {x.std().item():.4f}")
-
         x = F.elu(x)
         x = self.dropout(x)
-
         x = global_mean_pool(x, batch)
-        print(f"After pooling")
-        print(f"mean: {x.mean().item():.4f}, std: {x.std().item():.4f}")
-      
         return self.classifier(x)

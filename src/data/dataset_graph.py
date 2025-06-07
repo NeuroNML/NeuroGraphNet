@@ -8,7 +8,6 @@ import time
 
 import pandas as pd
 import numpy as np
-import networkx as nx
 from scipy import signal
 
 import torch
@@ -287,7 +286,7 @@ class GraphEEGDataset(Dataset):
             x = torch.tensor(segment_signal, dtype=torch.float)
             edge_index = self._create_edges(segment_signal)
 
-            if edge_index.shape == torch.Size([0]):
+            if edge_index.numel() == 0:
                 logger.warning(f"Skipping feature {index} - no edges created")
                 self.ids_to_eliminate.append(index)
                 skipped_count += 1
@@ -343,7 +342,7 @@ class GraphEEGDataset(Dataset):
                 x = torch.tensor(segment_signal, dtype=torch.float)
                 edge_index = self._create_edges(segment_signal)
 
-                if edge_index.shape == torch.Size([0]):
+                if edge_index.numel() == 0:
                     logger.warning(f"Skipping segment {index} - no edges created")
                     self.ids_to_eliminate.append(index)
                     skipped_count += 1
@@ -392,12 +391,12 @@ class GraphEEGDataset(Dataset):
             signal = self._normalize(signal)
         return signal
 
-    def _create_edges(self, signal_data: pd.DataFrame) -> torch.Tensor:
+    def _create_edges(self, signal_data: np.ndarray) -> torch.Tensor:
         """
         Creates edges between EEG channels based on the specified strategy.
 
         Args:
-            signal_data: DataFrame containing EEG signals
+            signal_data: Numpy array containing EEG signals (channels x time)
 
         Returns:
             torch.Tensor: Edge index tensor of shape [2, num_edges]
@@ -469,7 +468,7 @@ class GraphEEGDataset(Dataset):
         logger.debug(f"Created {edge_index.shape[1]} spatial edges")
         return edge_index
 
-    def _create_correlation_edges(self, signal_data: pd.DataFrame) -> torch.Tensor:
+    def _create_correlation_edges(self, signal_data: np.ndarray) -> torch.Tensor:
         """
         Creates edges based on correlation between channel signals.
 
@@ -477,7 +476,7 @@ class GraphEEGDataset(Dataset):
         - Otherwise: connects all pairs with correlation >= self.correlation_threshold (symmetric).
 
         Args:
-            signal_data (pd.DataFrame): EEG signal data (channels x time)
+            signal_data (np.ndarray): EEG signal data (channels x time)
 
         Returns:
             torch.Tensor: Edge index tensor (2, num_edges)
@@ -487,12 +486,11 @@ class GraphEEGDataset(Dataset):
 
         # Eliminate samples with NaN in corr matrix (0 signal)
         if np.isnan(corr_matrix).any():
-             logger.warning("Invalid correlations detected (NaN), returning empty edge index")
-             return torch.empty(0)
+            logger.warning("Invalid correlations detected (NaN), returning empty edge index")
+            return torch.empty((2, 0), dtype=torch.long)
         if np.isinf(corr_matrix).any():
-             logger.warning("Invalid correlations detected (Inf), returning empty edge index")
-             return  torch.empty(0)
-            
+            logger.warning("Invalid correlations detected (Inf), returning empty edge index")
+            return torch.empty((2, 0), dtype=torch.long)
 
         num_channels = len(self.channels)
         edge_list = []
@@ -521,6 +519,9 @@ class GraphEEGDataset(Dataset):
                     if corr_matrix[i, j] >= self.correlation_threshold:
                         edge_list.append([i, j])
                         edge_list.append([j, i])
+
+        if not edge_list:
+            return torch.empty((2, 0), dtype=torch.long)
 
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         logger.debug(f"Created {edge_index.shape[1]} correlation edges")

@@ -3,10 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, global_add_pool, BatchNorm
 
-class EEGGraphConvLSTMNet(nn.Module):
+class EEGGCNLSTM(nn.Module):
+    """
+    Combined GCN-LSTM model for EEG signal processing.
+    """
     def __init__(self, in_channels=3000, lstm_hidden=128,
                  gcn_dims=[320, 180, 90, 50], mlp_dims=[32, 16]):
-        super(EEGGraphConvLSTMNet, self).__init__()
+        super(EEGGCNLSTM, self).__init__()
 
         self.lstm = nn.LSTM(
             input_size=1,           # EEG: (batch, time, features), here features=1

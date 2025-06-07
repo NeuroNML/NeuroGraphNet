@@ -1,11 +1,8 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, global_mean_pool
-from torch_geometric.nn import Linear
-from layers.eeggcn import EEGGCN
+from src.layers.gnn.gcn import EEGGCN
 
-class LSTMEncoder(nn.Module):
+class EEGLSTMEncoder(nn.Module):
     def __init__(self, input_dim=19, hidden_dim=64, num_layers=1, dropout=0.2, bidirectional=False):
         """
         LSTM-based encoder for EEG temporal signals
@@ -80,8 +77,8 @@ class HybridLSTMGCN(torch.nn.Module):
         super(HybridLSTMGCN, self).__init__()
         
         # LSTM for temporal encoding
-        self.lstm_encoder = LSTMEncoder(
-            input_dim=seq_length,  # Each node's sequence becomes the input
+        self.lstm_encoder = EEGLSTMEncoder(
+            input_dim=seq_length,
             hidden_dim=lstm_hidden_dim,
             num_layers=num_lstm_layers,
             dropout=lstm_dropout,
@@ -91,7 +88,7 @@ class HybridLSTMGCN(torch.nn.Module):
         # Calculate LSTM output dimension
         lstm_output_dim = lstm_hidden_dim * 2 if bidirectional else lstm_hidden_dim
         
-        # GCN for spatial processing (using your existing EEGGCN class)
+        # GCN for spatial processing
         self.gcn = EEGGCN(
             in_channels=lstm_output_dim,  # LSTM output becomes GCN input
             hidden_channels=gcn_hidden_dim,
@@ -143,7 +140,7 @@ class BatchedHybridLSTMGCN(torch.nn.Module):
         super(BatchedHybridLSTMGCN, self).__init__()
         
         # LSTM for temporal encoding
-        self.lstm_encoder = LSTMEncoder(
+        self.lstm_encoder = EEGLSTMEncoder(
             input_dim=seq_length,
             hidden_dim=lstm_hidden_dim,
             num_layers=num_lstm_layers,

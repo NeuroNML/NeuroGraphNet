@@ -1,10 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn import Linear, BatchNorm1d, Dropout, Sequential, ReLU
 
-
-class GNN_Encoder(nn.Module):
+class EEGGNNEncoder(nn.Module):
     '''
     EEGNet model that combines a time encoder (CNN or LSTM) with a GNN for EEG data.
     This model first encodes the time series data for each node using the specified time encoder,

@@ -1,11 +1,7 @@
 import torch
 import torch.nn.functional as F
-from torch.nn import Linear, BatchNorm1d, Dropout, Sequential, ReLU
+from torch.nn import Linear, Sequential, ReLU
 from torch_scatter import scatter_add, scatter_mean, scatter_max
-
-# Custom imports
-from src.utils.models_funcs import pooling
-
 
 class EEGMPNN(torch.nn.Module):
     def __init__(
@@ -38,9 +34,8 @@ class EEGMPNN(torch.nn.Module):
         self.dropout = torch.nn.Dropout(dropout_prob)
         self.final_pooling = pooling_type
 
-        # Create ModuleLists to hold message passing layers and batch norm layers
+        # Create ModuleList to hold message passing layers
         self.mp_layers = torch.nn.ModuleList()
-        # self.bn_layers = torch.nn.ModuleList()
         if num_mp_layers == 1:
             self.mp_layers.append(
                 MessagePassing(in_channels, out_channels, aggr=pooling_message)
@@ -51,7 +46,6 @@ class EEGMPNN(torch.nn.Module):
             self.mp_layers.append(
                 MessagePassing(in_channels, hidden_channels, aggr=pooling_message)
             )
-            # self.bn_layers.append(BatchNorm1d(hidden_channels))
 
             # Middle layers: hidden_channels -> hidden_channels
             for _ in range(1, num_mp_layers - 2):
@@ -60,15 +54,12 @@ class EEGMPNN(torch.nn.Module):
                         hidden_channels, hidden_channels, aggr=pooling_message
                     )
                 )
-                # self.bn_layers.append(BatchNorm1d(hidden_channels))
 
             # Last layer: hidden_channels -> out_channels
             self.mp_layers.append(
                 MessagePassing(hidden_channels, out_channels, aggr=pooling_message)
             )
-            # self.bn_layers.append(BatchNorm1d(out_channels))
 
-        # self.bn_layers = torch.nn.ModuleList([BatchNorm1d(hidden_channels) for _ in range(num_mp_layers - 1)])
         # Output layer for binary classification
         self.linear = Linear(out_channels, 1)
 
@@ -89,7 +80,6 @@ class EEGMPNN(torch.nn.Module):
         for i in range(len(self.mp_layers) - 1):
             x = self.mp_layers[i](x, edge_index, edge_attr)
             x = F.relu(x)
-            # x = self.dropout(x)
 
         # Apply the last message passing layer (no ReLU or dropout)
         x = self.mp_layers[-1](x, edge_index, edge_attr)
