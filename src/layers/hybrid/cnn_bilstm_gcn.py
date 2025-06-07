@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
 
-from src.layers.cnn_bilstm import CNN_BiLSTM_Encoder
 from src.layers.gnn.gcn import EEGGCN
-from src.layers.hybrid.cnn_bilstm import EEGCNNBiLSTMEncoder
+from src.layers.encoders.cnnbilstm_encoder import EEGCNNBiLSTMEncoder
 
 
-class EEGCNNBiLSTMGNN(nn.Module):
+class EEGCNNBiLSTMGCN(nn.Module):
     """
     Hybrid model combining a CNN-BiLSTM encoder for temporal feature extraction
     per EEG channel and a Graph Convolutional Network (GCN) for spatial feature integration.
@@ -20,21 +19,25 @@ class EEGCNNBiLSTMGNN(nn.Module):
     def __init__(
         self,
         # Parameters for the CNN_BiLSTM_Encoder (temporal encoder)
-        cnn_dropout: float = 0.25,
+        cnn_dropout_prob: float = 0.25,
         lstm_hidden_dim: int = 64,
         lstm_out_dim: int = 64,  # This will be the time_encoder_output_dim for the GCN
-        lstm_dropout: float = 0.25,
-        num_layers: int = 1,
+        encoder_use_batch_norm: bool = True,
+        encoder_use_layer_norm: bool = False,
+        lstm_num_layers: int = 1,
+        lstm_dropout_prob: float = 0.25,
         # Parameters for the EEGGCN (graph neural network)
         gcn_hidden_channels: int = 64,
         gcn_out_channels: int = 32,
-        num_gcn_layers: int = 3,
-        gcn_dropout: float = 0.5,
-        num_classes: int = 1,  # For binary classification (seizure/non-seizure)
+        gcn_pooling_type: str = "mean",
+        gcn_use_batch_norm: bool = True,
+        gcn_num_layers: int = 3,
+        gcn_dropout_prob: float = 0.5,
+        # General parameters
         num_channels: int = 19,  # Number of EEG channels
     ):
         """
-        Initializes the EEGCNNBiLSTMGNN.
+        Initializes the EEGCNNBiLSTMGCN.
 
         Args:
             cnn_dropout (float): Dropout probability for the CNN part of the temporal encoder.
@@ -47,7 +50,6 @@ class EEGCNNBiLSTMGNN(nn.Module):
             gcn_out_channels (int): Output feature dimensions from the last GCN layer before final classification.
             num_gcn_layers (int): Number of GCN convolutional layers.
             gcn_dropout (float): Dropout probability for GCN layers.
-            num_classes (int): Number of output classes (e.g., 1 for binary seizure detection).
             num_channels (int): The fixed number of EEG channels (e.g., 19).
         """
         super().__init__()
@@ -57,25 +59,29 @@ class EEGCNNBiLSTMGNN(nn.Module):
         self.time_encoder_output_dim = lstm_out_dim
 
         # Initialize the temporal encoder for each EEG channel.
-        # Parameters for CNN_BiLSTM_Encoder are passed directly.
-        self.channel_encoder = CNN_BiLSTM_Encoder(
-            cnn_dropout=cnn_dropout,
+        self.channel_encoder = EEGCNNBiLSTMEncoder(
+            cnn_dropout=cnn_dropout_prob,
             lstm_hidden_dim=lstm_hidden_dim,
             lstm_out_dim=lstm_out_dim,
-            lstm_dropout=lstm_dropout,
-            num_layers=num_layers,
+            lstm_dropout=lstm_dropout_prob,
+            num_layers=lstm_num_layers,
+            use_batch_norm=encoder_use_batch_norm,
+            use_layer_norm=encoder_use_layer_norm,
+            add_classifier=False,
         )
 
         # Initialize the Graph Convolutional Network.
         # Its input dimension (in_channels) will be the output dimension
         # produced by the channel_encoder (lstm_out_dim).
         self.gcn = EEGGCN(
-            in_channels=self.time_encoder_output_dim,  # This is lstm_out_dim
+            in_channels=self.time_encoder_output_dim,
             hidden_channels=gcn_hidden_channels,
+            num_conv_layers=gcn_num_layers,
+            pooling_type=gcn_pooling_type,
             out_channels=gcn_out_channels,
-            num_classes=num_classes,  # This is used for the final linear layer within EEGGCN
-            num_conv_layers=num_gcn_layers,
-            dropout=gcn_dropout,
+            dropout_prob=gcn_dropout_prob,
+            use_batch_norm=gcn_use_batch_norm,
+            use_cnn_preprocessing=False,
         )
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, batch_labels: torch.Tensor) -> torch.Tensor:
@@ -93,7 +99,7 @@ class EEGCNNBiLSTMGNN(nn.Module):
                                   Shape: [total_num_nodes_in_batch]. Used for global pooling.
 
         Returns:
-            torch.Tensor: Class logits for each graph in the batch. Shape: [num_graphs_in_batch, num_classes].
+            torch.Tensor: Class logits for each graph in the batch. Shape: [num_graphs_in_batch, 1].
         """
         # The input 'x' represents a batch of EEG recordings,
         # where each recording has multiple channels (nodes) and time steps.

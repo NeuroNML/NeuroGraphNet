@@ -3,9 +3,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Dropout, BatchNorm1d
-from torch_geometric.nn import GCNConv, global_max_pool, global_mean_pool, global_add_pool
+from torch_geometric.nn import GCNConv
 
-from utils.model import pooling
+from src.utils.model import pooling
 
 class EEGGCN(torch.nn.Module):
     """
@@ -66,22 +66,22 @@ class EEGGCN(torch.nn.Module):
         # First layer
         if num_conv_layers == 1:
             self.conv_layers.append(GCNConv(in_channels, out_channels))
-            if use_batch_norm:
+            if use_batch_norm and self.batch_norms is not None:
                 self.batch_norms.append(BatchNorm1d(out_channels))
         else:
             self.conv_layers.append(GCNConv(in_channels, hidden_channels))
-            if use_batch_norm:
+            if use_batch_norm and self.batch_norms is not None:
                 self.batch_norms.append(BatchNorm1d(hidden_channels))
             
             # Intermediate layers
             for _ in range(num_conv_layers - 2):
                 self.conv_layers.append(GCNConv(hidden_channels, hidden_channels))
-                if use_batch_norm:
+                if use_batch_norm and self.batch_norms is not None:
                     self.batch_norms.append(BatchNorm1d(hidden_channels))
             
             # Final layer
             self.conv_layers.append(GCNConv(hidden_channels, out_channels))
-            if use_batch_norm:
+            if use_batch_norm and self.batch_norms is not None:
                 self.batch_norms.append(BatchNorm1d(out_channels))
 
         # Pooling and dropout
@@ -120,7 +120,7 @@ class EEGGCN(torch.nn.Module):
         if self.cnn is not None:
             x = x.unsqueeze(1)  # [N, 1, T]
             x = self.cnn(x).squeeze(1)  # [N, T/4]
-            x = self.project_to(x)  # [N, in_channels]
+            # x = self.project_to(x)  # [N, in_channels]
 
         # GCN layers
         for i in range(self.num_conv_layers - 1):

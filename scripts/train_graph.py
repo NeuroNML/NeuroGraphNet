@@ -91,9 +91,9 @@ def main():
         clips=clips_tr,
         signal_folder=train_dir,
         extracted_features_dir=extracted_features_dir,
-        selected_features_train=config.selected_features,
+        use_selected_features=config.selected_features,
         embeddings_dir = embeddings_dir,
-        embeddings_train = config.embeddings,
+        use_embeddings = config.embeddings,
         edge_strategy=config.edge_strategy,
         spatial_distance_file=(
             spatial_distance_file if config.edge_strategy == "spatial" else None

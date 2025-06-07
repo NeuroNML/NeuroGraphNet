@@ -1,7 +1,9 @@
 # --------------------------------------- General imports ---------------------------------------#
+from cProfile import label
 import os.path as osp
 import os
-from typing import Optional, Dict, Tuple, List
+from pathlib import Path
+from typing import Optional, Dict, Tuple, List, Union
 from collections import defaultdict
 import logging
 import time
@@ -29,17 +31,17 @@ from src.utils.general_funcs import log
 class GraphEEGDataset(Dataset):
     def __init__(
         self,
-        root: str,
+        root: Path,
         clips: pd.DataFrame,
-        signal_folder: str,
-        embeddings_dir: str,
-        embeddings_train: bool,
-        extracted_features_dir: str,
-        selected_features_train: bool,
+        signal_folder: Path,
+        embeddings_dir: Path,
+        use_embeddings: bool,
+        extracted_features_dir: Path,
+        use_selected_features: bool,
         edge_strategy: str = "spatial",
-        spatial_distance_file: Optional[str] = None,
+        spatial_distance_file: Optional[Path] = None,
         correlation_threshold: float = 0.7,
-        top_k: int = None,
+        top_k: Optional[int] = None,
         force_reprocess: bool = True,
         bandpass_frequencies: Tuple[float, float] = (0.5, 50),
         segment_length: int = 12 * 250,  # 12 seconds * 250 Hz -> 3000 samples
@@ -85,9 +87,9 @@ class GraphEEGDataset(Dataset):
         self.signal_folder = signal_folder
         self.force_reprocess = force_reprocess
         self.embeddings_dir = embeddings_dir
-        self.embeddings_train = embeddings_train
+        self.embeddings_train = use_embeddings
         self.extracted_features_dir = extracted_features_dir
-        self.selected_features_train = selected_features_train
+        self.selected_features_train = use_selected_features
         self.bandpass_frequencies = bandpass_frequencies
         self.edge_strategy = edge_strategy
         self.top_k = top_k
@@ -149,7 +151,7 @@ class GraphEEGDataset(Dataset):
             self.spatial_distances = self._load_spatial_distances()
             logger.info(f"Loaded {len(self.spatial_distances)} spatial distance pairs")
 
-        super().__init__(root, transform=None, pre_transform=None, pre_filter=None)
+        super().__init__(str(root), transform=None, pre_transform=None, pre_filter=None)
 
         # Ensure the processed_dir exists
         if not os.path.exists(self.processed_dir):
@@ -166,11 +168,11 @@ class GraphEEGDataset(Dataset):
                     deleted_count += 1
             logger.info(f"Deleted {deleted_count} existing processed files")
 
-            if selected_features_train == True:
+            if use_selected_features == True:
                 logger.info("Starting feature processing...")
                 self.process_features()
 
-            elif embeddings_train == True:
+            elif use_embeddings == True:
                 logger.info("Starting embedding processing...")
                 self.process_embeddings()
             else:
@@ -192,7 +194,7 @@ class GraphEEGDataset(Dataset):
         spatial_distances = (
             {}
         )  # Dictionary to store distances between electrodes with keys (tuple) as (ch1, ch2)
-        df_distances = pd.read_csv(self.spatial_distance_file)
+        df_distances = pd.read_csv(str(self.spatial_distance_file))
         for _, row in df_distances.iterrows():
             ch1 = row["from"]
             ch2 = row["to"]
@@ -212,7 +214,7 @@ class GraphEEGDataset(Dataset):
         logger.info("Starting embedding processing...")
         start_time = time.time()
 
-        embeddings = np.load(self.embeddings_dir / "embeddings.npy")
+        embeddings = np.load(str(self.embeddings_dir / "embeddings.npy"))
         if not self.is_test:
             labels = np.load(self.embeddings_dir / "labels_embeddings.npy")
             logger.info(f"Loaded embeddings shape: {embeddings.shape}, labels shape: {labels.shape}")
@@ -250,7 +252,7 @@ class GraphEEGDataset(Dataset):
             if self.is_test:
                 data = Data(x=x, edge_index=edge_index, id=original_id)
             else:
-                y = torch.tensor([labels[i]], dtype=torch.float32)
+                y = torch.tensor([labels[i]], dtype=torch.float32) # type: ignore
                 data = Data(x=x, edge_index=edge_index, y=y, id=original_id)
 
             torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
@@ -391,12 +393,12 @@ class GraphEEGDataset(Dataset):
             signal = self._normalize(signal)
         return signal
 
-    def _create_edges(self, signal_data: np.ndarray) -> torch.Tensor:
+    def _create_edges(self, signal_data: torch.Tensor) -> torch.Tensor:
         """
         Creates edges between EEG channels based on the specified strategy.
 
         Args:
-            signal_data: Numpy array containing EEG signals (channels x time)
+            signal_data: Torch tensor containing EEG signals (channels x time)
 
         Returns:
             torch.Tensor: Edge index tensor of shape [2, num_edges]
@@ -468,7 +470,7 @@ class GraphEEGDataset(Dataset):
         logger.debug(f"Created {edge_index.shape[1]} spatial edges")
         return edge_index
 
-    def _create_correlation_edges(self, signal_data: np.ndarray) -> torch.Tensor:
+    def _create_correlation_edges(self, signal_data: torch.Tensor) -> torch.Tensor:
         """
         Creates edges based on correlation between channel signals.
 
@@ -476,13 +478,13 @@ class GraphEEGDataset(Dataset):
         - Otherwise: connects all pairs with correlation >= self.correlation_threshold (symmetric).
 
         Args:
-            signal_data (np.ndarray): EEG signal data (channels x time)
+            signal_data (torch.Tensor): EEG signal data (channels x time)
 
         Returns:
             torch.Tensor: Edge index tensor (2, num_edges)
         """
         logger.debug("Computing correlation matrix")
-        corr_matrix = np.abs(np.corrcoef(signal_data))
+        corr_matrix = torch.abs(torch.corrcoef(signal_data))
 
         # Eliminate samples with NaN in corr matrix (0 signal)
         if np.isnan(corr_matrix).any():
