@@ -2,9 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from layers.encoders.cnn_encoder import EEGCNNEncoder
-from layers.encoders.cnnbilstmattention_encoder import EEGCNNBiLSTMAttentionEncoder
-from src.layers.temporal.lstm_attention import EEGLSTMAttention
+from src.layers.encoders.cnnbilstmattention_encoder import EEGCNNBiLSTMAttentionEncoder
 from src.layers.gnn.gcn import EEGGCN
 
 
