@@ -26,7 +26,7 @@ from src.utils.index import ensure_eeg_multiindex
 def _trapezoid_integrate(y, x=None):
     """
     Compatibility function for trapezoidal integration.
-    Uses np.trapezoid if available (NumPy 2.0+), otherwise falls back to np.trapz.
+    Uses np.trapezoid if available, otherwise falls back to np.trapz. (fixes strange bug)
     """
     if hasattr(np, 'trapezoid'):
         result = np.trapezoid(y, x)
@@ -767,7 +767,7 @@ CPU_COUNT = multiprocessing.cpu_count()
 
 def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[int] = None):
     overall_pipeline_start_time = time.time()
-    print(f"\n🧠 EEG FEATURE EXTRACTION PIPELINE (Full Refactored Script)")
+    print(f"\n🧠 EEG FEATURE EXTRACTION PIPELINE")
     print(f"{'='*60}")
     print(f"⏰ Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"💻 System info: {CPU_COUNT} CPU cores available")
@@ -800,7 +800,7 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     
     if test_mode: print(f"\n🧪 TEST MODE ENABLED - Processing limited data samples.")
     if verbose:
-        print(f"\n📊 REFINED EEG FEATURE EXTRACTION DETAILS:")
+        print(f"\n📊 EEG FEATURE EXTRACTION DETAILS:")
         print(f"   Features per channel: {features_per_channel}")
         print(f"   Total expected features per segment (for {expected_channels} channels): {expected_channels * features_per_channel}")
         print(f"   Parallel processing with up to {max_workers} workers.")
