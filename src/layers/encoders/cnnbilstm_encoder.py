@@ -16,8 +16,12 @@ class EEGCNNBiLSTMEncoder(nn.Module):
                  lstm_out_dim=64, lstm_dropout=0.25, num_layers=1,
                  use_batch_norm=True, use_layer_norm=True, add_classifier=False):
         super().__init__()
-        self.cnn = EEGCNNEncoder(in_channels=in_channels, dropout=cnn_dropout,
-                         use_batch_norm=use_batch_norm)
+        self.cnn = EEGCNNEncoder(
+            in_channels=in_channels,
+            dropout=cnn_dropout,
+            use_batch_norm=use_batch_norm
+        )
+
         self.lstm = EEGBiLSTMEncoder(
             input_size=128,  # CNN output channels
             hidden_dim=lstm_hidden_dim,

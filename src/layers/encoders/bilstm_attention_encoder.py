@@ -1,7 +1,7 @@
 import torch.nn as nn
 from src.layers.temporal.lstm_attention import EEGLSTMAttention
 
-class EEGBiLSTMEncoder(nn.Module):
+class EEGBiLSTMAttentionEncoder(nn.Module):
     """
     Bidirectional LSTM + Attention Encoder for EEG signal processing.
     Features:
@@ -17,9 +17,8 @@ class EEGBiLSTMEncoder(nn.Module):
             input_dim=input_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
-            dropout=dropout if num_layers > 1 else 0,
             bidirectional=True,
-            input_type='signal'
+            dropout=dropout if num_layers > 1 else 0,
         )
 
         self.project = nn.Sequential(

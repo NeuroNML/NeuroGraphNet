@@ -1,7 +1,7 @@
 import torch.nn as nn
 
 from src.layers.encoders.cnn_encoder import EEGCNNEncoder
-from src.layers.encoders.bilstm_attention_encoder import EEGBiLSTMEncoder
+from src.layers.encoders.bilstm_attention_encoder import EEGBiLSTMAttentionEncoder
 
 class EEGCNNBiLSTMAttentionEncoder(nn.Module):
     """
@@ -22,7 +22,7 @@ class EEGCNNBiLSTMAttentionEncoder(nn.Module):
             use_batch_norm=use_batch_norm
         )
 
-        self.lstm = EEGBiLSTMEncoder(
+        self.lstm = EEGBiLSTMAttentionEncoder(
             input_dim=128,  # CNN output channels
             hidden_dim=lstm_hidden_dim,
             dropout=lstm_dropout,
