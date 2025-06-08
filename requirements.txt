@@ -10,3 +10,4 @@ seiz-eeg
 torchmetrics
 jupyter # additional dependency to run jupyter notebooks
 wandb # weights and biases for experiment tracking
+torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu126.html # torch-scatter for PyTorch 2.6.0 with CUDA 12.6
