@@ -30,7 +30,7 @@ class GeoDataLoader:
         if len(dataset) > 0:
             sample = dataset[0]
             self.graph_feature_names = [
-                attr for attr in dir(sample) 
+                attr for attr in sample.keys() 
                 if attr.startswith('graph_') and not attr.startswith('__')
             ]
         

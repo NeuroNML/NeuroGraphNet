@@ -351,15 +351,19 @@ def augment_data_with_graph_features(
         node_feature_tensors = []
         if data.x is not None:
             node_feature_tensors.append(data.x)
-        
+
+        # append certain features (tagged with "node_") to node features
         node_graph_features = [v for k, v in graph_features.items() if k.startswith('node_')]
         if node_graph_features:
+            # update node features with graph-level features
             node_features_concat = torch.cat(node_graph_features, dim=1)
             node_feature_tensors.append(node_features_concat)
         
+        # append node-level features to the Data object
         if node_feature_tensors:
             new_data.x = torch.cat(node_feature_tensors, dim=1)
 
+    # append graph-level features to the Data object
     if feature_extractor.include_graph_features:
         for name, value in graph_features.items():
             if name.startswith('graph_'):

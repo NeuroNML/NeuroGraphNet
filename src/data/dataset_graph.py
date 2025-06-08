@@ -626,8 +626,8 @@ class GraphEEGDataset(Dataset):
                 logger.debug(f"Retrying load with weights_only=False for {file_path}")
                 data = torch.load(file_path, weights_only=False)
             else:
-                logger.error(f"Error loading {file_path}: {e}")
-                raise RuntimeError(f"Error loading processed file {file_path} for index {idx}: {e}")
+                logger.error(f"Error loading data from {file_path}: {e}")
+                raise ValueError(f"Could not load data from {file_path}") from e
         return data
 
     @property
