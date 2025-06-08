@@ -745,7 +745,7 @@ def process_session_for_features(
 
 
 # --- Main Execution Logic ---
-IS_SCITAS = False # User specific: Set to True if running on SCITAS environment
+IS_SCITAS = True # User specific: Set to True if running on SCITAS environment
 CPU_COUNT = multiprocessing.cpu_count()
 
 def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[int] = None):
@@ -770,7 +770,7 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     LOCAL_DATA_ROOT = project_root / "data"
     
     # SCITAS path needs to be configured by the user if IS_SCITAS is True
-    SCITAS_DATA_ROOT = Path("/home/user/data") # Placeholder: User should configure this
+    SCITAS_DATA_ROOT = Path("/home/ogut/data") # Placeholder: User should configure this
     DATA_ROOT = SCITAS_DATA_ROOT if IS_SCITAS else LOCAL_DATA_ROOT
     
     print(f"🔍 Using DATA_ROOT: {DATA_ROOT.resolve()}")
