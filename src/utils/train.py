@@ -14,7 +14,9 @@ from torch_geometric.utils import to_dense_batch
 from torch.utils.data import WeightedRandomSampler
 
 # Assuming Data and Batch are from PyTorch Geometric if used with GraphEEGDataset
-from torch_geometric.data import Batch as PyGBatch 
+from torch_geometric.data import Batch as PyGBatch
+
+from data.dataset_graph import GraphEEGDataset 
 
 # Import wandb with optional fallback
 try:
@@ -134,6 +136,8 @@ def train_model(
     wandb_run_name: Optional[str] = None,  # Wandb run name
     log_wandb: bool = True,  # Whether to log to wandb
     try_load_checkpoint: bool = True,
+    # pass original database to log information to wandb
+    original_dataset: Optional[GraphEEGDataset] = None,
 ) -> Tuple[Dict[str, List[float]], Dict[str, List[float]]]:
     """
     Generic training loop.
@@ -174,7 +178,7 @@ def train_model(
         # Add user-provided config
         if wandb_config:
             config.update(wandb_config)
-            
+
         try:
             wandb_run = wandb.init(
                 project=wandb_project or "neuro-graph-net",
@@ -182,12 +186,110 @@ def train_model(
                 config=config,
                 reinit=True
             )
+
+            logger.info(f"🔗 Wandb run initialized: {wandb_run.name}")
+
             # Watch the model for gradient and parameter tracking
             wandb.watch(model, log='all', log_freq=100)
             print(f"🔗 Wandb initialized: {wandb.run.name}")
+            
+            # Log dataset information to wandb if available
+            if original_dataset is not None:
+                logger.info("Logging dataset configuration to wandb...")
+                dataset_config = {}
+                
+                # Helper function to safely get attribute
+                def safe_get_attr(obj, attr_name, default=None):
+                    try:
+                        return getattr(obj, attr_name, default)
+                    except:
+                        return default
+                
+                # Signal processing settings
+                dataset_config['dataset/bandpass_frequencies'] = safe_get_attr(original_dataset, 'bandpass_frequencies', (0.5, 50))
+                dataset_config['dataset/segment_length'] = safe_get_attr(original_dataset, 'segment_length', 3000)
+                dataset_config['dataset/sampling_rate'] = safe_get_attr(original_dataset, 'sampling_rate', 250)
+                
+                # Calculate segment duration
+                segment_length = dataset_config['dataset/segment_length']
+                sampling_rate = dataset_config['dataset/sampling_rate']
+                if segment_length and sampling_rate:
+                    dataset_config['dataset/segment_duration_seconds'] = segment_length / sampling_rate
+                
+                # Preprocessing flags
+                dataset_config['dataset/apply_filtering'] = safe_get_attr(original_dataset, 'apply_filtering', False)
+                dataset_config['dataset/apply_rereferencing'] = safe_get_attr(original_dataset, 'apply_rereferencing', False)
+                dataset_config['dataset/apply_normalization'] = safe_get_attr(original_dataset, 'apply_normalization', False)
+                
+                # Graph construction settings
+                dataset_config['dataset/edge_strategy'] = safe_get_attr(original_dataset, 'edge_strategy', 'unknown')
+                dataset_config['dataset/top_k'] = safe_get_attr(original_dataset, 'top_k', None)
+                dataset_config['dataset/correlation_threshold'] = safe_get_attr(original_dataset, 'correlation_threshold', 0.7)
+                
+                # Feature settings
+                dataset_config['dataset/use_embeddings'] = safe_get_attr(original_dataset, 'embeddings_train', False)
+                dataset_config['dataset/use_selected_features'] = safe_get_attr(original_dataset, 'selected_features_train', False)
+                dataset_config['dataset/extract_graph_features'] = safe_get_attr(original_dataset, 'extract_graph_features', False)
+                
+                # Dataset metadata
+                dataset_config['dataset/n_channels'] = safe_get_attr(original_dataset, 'n_channels', 19)
+                dataset_config['dataset/is_test'] = safe_get_attr(original_dataset, 'is_test', False)
+                dataset_config['dataset/force_reprocess'] = safe_get_attr(original_dataset, 'force_reprocess', False)
+                
+                # Dataset size
+                try:
+                    dataset_config['dataset/total_samples'] = len(original_dataset)
+                except:
+                    dataset_config['dataset/total_samples'] = 'unknown'
+                
+                # Add graph feature types if available
+                graph_feature_types = safe_get_attr(original_dataset, 'graph_feature_types', None)
+                if graph_feature_types:
+                    dataset_config['dataset/graph_feature_types'] = graph_feature_types
+                
+                # Add graph feature extractor info if available
+                graph_feature_extractor = safe_get_attr(original_dataset, 'graph_feature_extractor', None)
+                if graph_feature_extractor and hasattr(graph_feature_extractor, 'feature_types'):
+                    dataset_config['dataset/graph_feature_extractor_types'] = graph_feature_extractor.feature_types
+                
+                # Add channel information
+                channels = safe_get_attr(original_dataset, 'channels', None)
+                if channels:
+                    dataset_config['dataset/channels'] = channels
+                    dataset_config['dataset/n_channels_actual'] = len(channels)
+                
+                # Add clips information if available
+                clips = safe_get_attr(original_dataset, 'clips', None)
+                if clips is not None:
+                    try:
+                        dataset_config['dataset/n_clips'] = len(clips)
+                        
+                        # Add label distribution for training data
+                        if not safe_get_attr(original_dataset, 'is_test', True) and hasattr(clips, 'columns') and 'label' in clips.columns:
+                            label_counts = clips['label'].value_counts().to_dict()
+                            dataset_config['dataset/label_distribution'] = label_counts
+                            dataset_config['dataset/n_positive'] = label_counts.get(1, 0)
+                            dataset_config['dataset/n_negative'] = label_counts.get(0, 0)
+                            if len(clips) > 0:
+                                dataset_config['dataset/positive_ratio'] = label_counts.get(1, 0) / len(clips)
+                        
+                        # Add patient/session information if available
+                        if hasattr(clips, 'columns'):
+                            if 'patient' in clips.columns:
+                                dataset_config['dataset/n_patients'] = clips['patient'].nunique()
+                            if 'session' in clips.columns:
+                                dataset_config['dataset/n_sessions'] = clips['session'].nunique()
+                    except Exception as e:
+                        logger.warning(f"Could not extract clips information: {e}")
+                
+                # Log the dataset configuration to wandb
+                wandb.config.update(dataset_config)
+                logger.info(f"Logged {len(dataset_config)} dataset parameters to wandb")
+                
         except Exception as e:
             print(f"⚠️ Warning: Could not initialize wandb: {e}")
             log_wandb = False
+
     elif log_wandb and not WANDB_AVAILABLE:
         print("⚠️ Warning: wandb logging requested but wandb not available")
         log_wandb = False
@@ -291,7 +393,7 @@ def train_model(
                 elif hasattr(data_batch_item, 'x') and hasattr(data_batch_item, 'y'):
                     if not to_dense_batch: # Should be caught earlier if PyG not installed but good check
                          raise ImportError("PyTorch Geometric 'to_dense_batch' is required for this non-GNN path if data is PyG Batch.")
-                    curr_batch = data_batch_item.to(device)
+                    curr_batch = data_batch_item.to(device) # type: ignore
                     y_targets = curr_batch.y.reshape(-1, 1)
                     if y_targets is None: continue
                     
@@ -404,7 +506,7 @@ def train_model(
                         else: continue # Skip if no labels in validation
                         logits = model(x_batch_val.float())
                     elif hasattr(data_batch_item_val, 'x') and hasattr(data_batch_item_val, 'y'):
-                        curr_batch = data_batch_item_val.to(device)
+                        curr_batch = data_batch_item_val.to(device) # type: ignore
                         y_targets = curr_batch.y.reshape(-1, 1)
                         if y_targets is None: continue
                         

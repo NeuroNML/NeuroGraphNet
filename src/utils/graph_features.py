@@ -10,11 +10,10 @@ modularity, assortativity, and spectral features.
 import numpy as np
 import torch
 from torch_geometric.data import Data
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 import networkx as nx
 from networkx.algorithms import community
-from torch_geometric.utils import to_networkx, degree
-from collections import defaultdict
+from torch_geometric.utils import to_networkx
 import logging
 
 # Set up logger
