@@ -11,12 +11,7 @@ import torch.optim as optim
 from tqdm import tqdm
 from torchmetrics.functional import accuracy, f1_score, auroc 
 from torch_geometric.utils import to_dense_batch
-from torch.utils.data import WeightedRandomSampler
-
-# Assuming Data and Batch are from PyTorch Geometric if used with GraphEEGDataset
-from torch_geometric.data import Batch as PyGBatch
-
-from data.dataset_graph import GraphEEGDataset 
+from src.data.dataset_graph import GraphEEGDataset 
 
 # Import wandb with optional fallback
 try:
