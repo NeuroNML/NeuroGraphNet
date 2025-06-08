@@ -15,6 +15,7 @@ import networkx as nx
 from networkx.algorithms import community
 from torch_geometric.utils import to_networkx
 import logging
+import warnings # Add this line
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -102,17 +103,46 @@ class GraphFeatureExtractor:
         """Compute node-level graph features."""
         features = {}
         num_nodes = G.number_of_nodes()
+        # It's crucial to handle cases where G.nodes() might not be a simple 0..N-1 range.
+        # However, the original code and tensor creation assumes 0..N-1 indexing for features.
+        # We'll proceed with this assumption but be mindful if node IDs are arbitrary.
+        # If node IDs are not 0..N-1, a mapping would be needed.
 
         if 'degree' in self.feature_types:
-            degrees = torch.tensor([G.degree(n) for n in range(num_nodes)], dtype=torch.float32)
+            # G.degree() returns a DegreeView, which is an iterator of (node, degree) pairs or a dict-like object.
+            # We need a list of degrees corresponding to nodes 0 to num_nodes-1.
+            degree_view = G.degree() # type: ignore
+            degrees_list = [0] * num_nodes # Initialize with zeros
+            for node, deg in degree_view:
+                if 0 <= node < num_nodes: # Ensure node index is within expected range for the tensor
+                    degrees_list[node] = deg
+            degrees = torch.tensor(degrees_list, dtype=torch.float32)
             features['node_degree'] = degrees.unsqueeze(1)
-            max_degree = degrees.max().item() if degrees.numel() > 0 else 1.0
+            max_degree = degrees.max().item() if degrees.numel() > 0 and degrees.max().numel() > 0 else 1.0
             features['node_degree_normalized'] = (degrees / max_degree if max_degree > 0 else degrees).unsqueeze(1)
 
         if 'clustering' in self.feature_types:
-            clustering = nx.clustering(G)
-            clustering_values = torch.tensor([clustering[n] for n in range(num_nodes)], dtype=torch.float32)
-            features['node_clustering'] = clustering_values.unsqueeze(1)
+            try:
+                clustering_dict = nx.clustering(G) # Returns a dict {node: clustering_coefficient}
+                # Ensure we get clustering values for nodes 0 to num_nodes-1
+                clustering_values_list = [clustering_dict.get(n, 0.0) for n in range(num_nodes)]
+                clustering_values = torch.tensor(clustering_values_list, dtype=torch.float32)
+                features['node_clustering'] = clustering_values.unsqueeze(1)
+            except Exception as e: # nx.clustering can return a single float for some graph types if all nodes have same clustering.
+                                   # However, the more common return is a dict.
+                logger.warning(f"Could not compute node clustering as dict: {e}. Trying to interpret as single value or defaulting.")
+                try:
+                    # Attempt to see if a single value was returned (less common for general graphs)
+                    clustering_val = nx.clustering(G)
+                    if isinstance(clustering_val, (float, int)):
+                         clustering_values = torch.full((num_nodes,), float(clustering_val), dtype=torch.float32)
+                         features['node_clustering'] = clustering_values.unsqueeze(1)
+                    else: # If it's not a dict and not a single float/int, default to zeros
+                        logger.warning(f"Node clustering returned unexpected type: {type(clustering_val)}. Defaulting to zeros.")
+                        features['node_clustering'] = torch.zeros(num_nodes, 1, dtype=torch.float32)
+                except Exception as e_inner:
+                    logger.warning(f"Further error computing node clustering: {e_inner}. Defaulting to zeros.")
+                    features['node_clustering'] = torch.zeros(num_nodes, 1, dtype=torch.float32)
 
         if 'centrality' in self.feature_types:
             self._safe_compute(features, 'node_betweenness', lambda: nx.betweenness_centrality(G), num_nodes)
@@ -171,14 +201,34 @@ class GraphFeatureExtractor:
                     features[key] = torch.tensor([0.0], dtype=torch.float32)
 
         if 'assortativity' in self.feature_types:
-            features['graph_assortativity'] = torch.tensor([nx.degree_assortativity_coefficient(G)], dtype=torch.float32)
+            try:
+                # Temporarily ignore the specific RuntimeWarning from networkx's assortativity calculation
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', category=RuntimeWarning, message="invalid value encountered in scalar divide")
+                    # The original np.errstate is also good practice for numerical stability
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        assortativity = nx.degree_assortativity_coefficient(G)
+                        # Handle NaN/inf values that might result from the computation
+                        if np.isnan(assortativity) or np.isinf(assortativity):
+                            assortativity = 0.0
+                        features['graph_assortativity'] = torch.tensor([assortativity], dtype=torch.float32)
+            except Exception as e:
+                logger.warning(f"Could not compute assortativity: {e}. Defaulting to 0.0.")
+                features['graph_assortativity'] = torch.tensor([0.0], dtype=torch.float32)
 
         if 'modularity' in self.feature_types and num_nodes > 0:
             try:
-                communities = community.louvain_communities(G)
-                features['graph_num_communities'] = torch.tensor([len(communities)], dtype=torch.float32)
-                features['graph_modularity'] = torch.tensor([community.modularity(G, communities)], dtype=torch.float32)
-            except:
+                # community.louvain_communities returns a list of frozensets (each frozenset is a community)
+                communities_list_of_sets = community.louvain_communities(G) # This is already a list of iterables
+                features['graph_num_communities'] = torch.tensor([len(communities_list_of_sets)], dtype=torch.float32)
+                if communities_list_of_sets: # Only compute modularity if communities were found
+                    # modularity function expects the graph and the list of communities (sets/frozensets)
+                    modularity_val = community.modularity(G, communities_list_of_sets)
+                    features['graph_modularity'] = torch.tensor([modularity_val], dtype=torch.float32)
+                else:
+                    features['graph_modularity'] = torch.tensor([0.0], dtype=torch.float32)
+            except Exception as e: 
+                logger.warning(f"Could not compute modularity: {e}. Defaulting to 0.0.")
                 features['graph_num_communities'] = torch.tensor([0.0], dtype=torch.float32)
                 features['graph_modularity'] = torch.tensor([0.0], dtype=torch.float32)
 
@@ -221,8 +271,11 @@ class GraphFeatureExtractor:
     def _safe_compute(self, features_dict, key, func, num_nodes):
         """Safely compute a feature and handle exceptions."""
         try:
-            result = func()
-            values = torch.tensor([result[n] for n in range(num_nodes)], dtype=torch.float32)
+            result_dict = func() # result is expected to be a dict {node: value}
+            # Ensure values are extracted for nodes 0 to num_nodes-1
+            # This assumes nodes are 0-indexed. If not, mapping is needed.
+            values_list = [result_dict.get(n, 0.0) for n in range(num_nodes)]
+            values = torch.tensor(values_list, dtype=torch.float32)
             features_dict[key] = values.unsqueeze(1)
         except Exception as e:
             logger.warning(f"Could not compute {key}: {e}. Defaulting to zeros.")
