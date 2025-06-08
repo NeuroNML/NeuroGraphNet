@@ -1,7 +1,6 @@
 from typing import Optional
 import torch
 import torch.nn as nn
-from torch_geometric.nn import global_mean_pool
 import logging
 
 from src.layers.gnn.gcn import EEGGCN
@@ -101,13 +100,14 @@ class EEGCNNBiLSTMGCN(nn.Module):
         # produced by the channel_encoder (lstm_out_dim).
         self.gcn = EEGGCN(
             in_channels=lstm_out_dim,
-            hidden_channels=hidden_dim,
+            hidden_channels=out_channels,  # Use out_channels as hidden_channels
+            out_channels=hidden_dim,       # Use hidden_dim as final output before pooling
             num_conv_layers=num_conv_layers,
             pooling_type=pooling_type,
-            out_channels=out_channels,
             dropout_prob=gcn_dropout,
             use_batch_norm=gcn_use_batch_norm,
             use_cnn_preprocessing=False,
+            mlp_dims=None,  # Disable the built-in classifier to get features instead of logits
         )
 
         # Classifier layer
@@ -158,8 +158,7 @@ class EEGCNNBiLSTMGCN(nn.Module):
 
         # Pass the extracted node features (embeddings) and the graph structure
         # (edge_index and batch tensors) to the GCN.
-        # The GCN will perform graph convolutions and then global pooling
-        # to get graph-level representations.
+        # With mlp_dims=None, GCN returns features instead of logits
         gcn_output = self.gcn(node_features, edge_index, batch)
         
         # gcn_output should have shape: [num_graphs_in_batch, hidden_dim]

@@ -88,10 +88,12 @@ class EEGGCN(torch.nn.Module):
         self.pooling_type = pooling_type
         self.dropout = Dropout(p=dropout_prob)
 
-        # MLP head
-        if mlp_dims is not None:
+        # MLP head - if mlp_dims is None, don't create any classifier
+        self.use_classifier = mlp_dims is not None
+        if self.use_classifier:
             mlp_layers = []
             prev_dim = out_channels
+            assert mlp_dims is not None, "mlp_dims must be provided for classifier"
             for dim in mlp_dims:
                 mlp_layers.extend([
                     nn.Linear(prev_dim, dim),
@@ -102,7 +104,7 @@ class EEGGCN(torch.nn.Module):
             mlp_layers.append(nn.Linear(prev_dim, 1))
             self.mlp = nn.Sequential(*mlp_layers)
         else:
-            self.mlp = nn.Linear(out_channels, 1)
+            self.mlp = None
 
     def forward(self, x, edge_index, batch):
         """
@@ -139,5 +141,8 @@ class EEGGCN(torch.nn.Module):
         # Perform pooling
         x = pooling(x, batch, self.pooling_type)
 
-        # MLP head
-        return self.mlp(x)
+        # Return features or logits based on whether classifier is used
+        if self.use_classifier and self.mlp is not None:
+            return self.mlp(x)
+        else:
+            return x
