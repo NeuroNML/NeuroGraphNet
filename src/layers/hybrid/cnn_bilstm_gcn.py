@@ -75,8 +75,8 @@ class EEGCNNBiLSTMGCN(nn.Module):
         self.use_graph_features = use_graph_features and graph_feature_dim > 0
 
         # Compute the classifier input dimension
-        # After GCN pooling, we get hidden_dim features
-        classifier_input_dim = hidden_dim
+        # After GCN pooling, we get out_channels features
+        classifier_input_dim = out_channels
         if self.use_graph_features:
             classifier_input_dim += graph_feature_dim
 
@@ -100,8 +100,8 @@ class EEGCNNBiLSTMGCN(nn.Module):
         # produced by the channel_encoder (lstm_out_dim).
         self.gcn = EEGGCN(
             in_channels=lstm_out_dim,
-            hidden_channels=out_channels,  # Use out_channels as hidden_channels
-            out_channels=hidden_dim,       # Use hidden_dim as final output before pooling
+            hidden_channels=hidden_dim,    # Use hidden_dim as hidden_channels
+            out_channels=out_channels,     # Use out_channels as final output before pooling
             num_conv_layers=num_conv_layers,
             pooling_type=pooling_type,
             dropout_prob=gcn_dropout,
