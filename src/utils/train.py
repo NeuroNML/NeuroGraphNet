@@ -154,6 +154,11 @@ def train_model(
     wandb_run = None
     if log_wandb and WANDB_AVAILABLE:
         logger.info("Initializing wandb...")
+        
+        # Use checkpoint file name as run name if not provided
+        if wandb_run_name is None:
+            wandb_run_name = save_path.stem  # Get filename without extension
+        
         # Prepare wandb config
         config = {
             'model_type': 'GNN' if use_gnn else 'Standard',
