@@ -17,8 +17,20 @@ from torch_geometric.utils import to_networkx
 import logging
 import warnings # Add this line
 
-# Set up logger
+# Set up logger with console handler
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    # Create console handler with a higher log level
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    
+    # Create formatter and add it to the handler
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    
+    # Add the handler to the logger
+    logger.addHandler(console_handler)
+    logger.setLevel(logging.INFO)
 
 
 class GraphFeatureExtractor:
