@@ -22,7 +22,7 @@ class EEGBiLSTMEncoder(nn.Module):
         )
 
         self.project = nn.Sequential(
-            nn.Linear(2 * hidden_dim, out_dim),
+            nn.Linear(2 * hidden_dim, out_dim),  # e.g., 128 → 64
             nn.ReLU()
         )
         self.dropout = nn.Dropout(dropout)

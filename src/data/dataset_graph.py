@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 # --------------------------- Custom imports ---------------------------#
 from src.utils.preprocessing_funcs import time_filtering
-from src.utils.general_funcs import log
 from src.utils.graph_features import GraphFeatureExtractor, augment_data_with_graph_features
 
 
@@ -52,6 +51,9 @@ class GraphEEGDataset(Dataset):
         is_test: bool = False,  # New parameter to indicate test mode
         extract_graph_features: bool = False,  # New parameter to control graph feature extraction
         graph_feature_types: Optional[List[str]] = None,  # Types of graph features to extract
+        graph_feature_include_node_features: bool = False,  # Include node features in graph features
+        avg_corr_seizure_path: Optional[Path] = None,
+        avg_corr_non_seizure_path: Optional[Path] = None,
     ):
         """
         Custom PyTorch Geometric dataset for EEG data.
@@ -85,6 +87,8 @@ class GraphEEGDataset(Dataset):
         logger.info(f"  - Sampling rate: {sampling_rate}")
         logger.info(f"  - Test mode: {is_test}")
         logger.info(f"  - Extract graph features: {extract_graph_features}")
+        logger.info(f"  - Avg Seizure Corr Path: {avg_corr_seizure_path}")
+        logger.info(f"  - Avg Non-Seizure Corr Path: {avg_corr_non_seizure_path}")
 
         self.root = root
         self.clips = clips
@@ -106,12 +110,63 @@ class GraphEEGDataset(Dataset):
         self.sampling_rate = sampling_rate
         self.is_test = is_test
         self.extract_graph_features = extract_graph_features
+        self.include_node_features = graph_feature_include_node_features
+        
+        self.avg_corr_seizure_path = avg_corr_seizure_path
+        self.avg_corr_non_seizure_path = avg_corr_non_seizure_path
+        self.avg_corr_seizure: Optional[np.ndarray] = None
+        self.avg_corr_non_seizure: Optional[np.ndarray] = None
+        self.diff_corr_matrix: Optional[np.ndarray] = None
+
+        if self.edge_strategy == "relevance_diff_correlation":
+            logger.info("Edge strategy: relevance_diff_correlation. Loading average correlation matrices.")
+            if self.avg_corr_seizure_path and self.avg_corr_non_seizure_path:
+                try:
+                    # Ensure paths are strings for np.load if they are Path objects
+                    seizure_path_str = str(self.avg_corr_seizure_path)
+                    non_seizure_path_str = str(self.avg_corr_non_seizure_path)
+
+                    self.avg_corr_seizure = np.load(seizure_path_str)
+                    if self.avg_corr_seizure is None:
+                        logger.error(f"Failed to load average seizure correlation matrix from {seizure_path_str}. It is None.")
+                        raise ValueError("Average seizure correlation matrix cannot be None.")
+                    logger.info(f"Loaded average seizure correlation matrix from {seizure_path_str}, shape: {self.avg_corr_seizure.shape}")
+                    self.avg_corr_non_seizure = np.load(non_seizure_path_str)
+                    if self.avg_corr_non_seizure is None:
+                        logger.error(f"Failed to load average non-seizure correlation matrix from {non_seizure_path_str}. It is None.")
+                        raise ValueError("Average non-seizure correlation matrix cannot be None.")
+                    logger.info(f"Loaded average non-seizure correlation matrix from {non_seizure_path_str}, shape: {self.avg_corr_non_seizure.shape}")
+
+                    if self.avg_corr_seizure is None or self.avg_corr_non_seizure is None:
+                        logger.error("One or both average correlation matrices are None. Check the files.")
+                        raise ValueError("Average correlation matrices cannot be None.")
+
+                    if self.avg_corr_seizure.shape != self.avg_corr_non_seizure.shape:
+                        logger.error(f"Shapes of average seizure ({self.avg_corr_seizure.shape}) and non-seizure ({self.avg_corr_non_seizure.shape}) correlation matrices do not match!")
+                        raise ValueError("Average correlation matrices shape mismatch.")
+                    
+                    if self.avg_corr_seizure.shape[0] != self.n_channels or self.avg_corr_seizure.shape[1] != self.n_channels:
+                         logger.error(f"Shape of average correlation matrices ({self.avg_corr_seizure.shape}) does not match n_channels ({self.n_channels})!")
+                         raise ValueError(f"Average correlation matrices shape ({self.avg_corr_seizure.shape}) does not match n_channels ({self.n_channels}).")
+
+                    self.diff_corr_matrix = np.abs(self.avg_corr_seizure - self.avg_corr_non_seizure)
+                    logger.info(f"Computed difference correlation matrix, shape: {self.diff_corr_matrix.shape}")
+
+                except FileNotFoundError as e:
+                    logger.error(f"Could not load average correlation matrix: {e}. Check paths: {self.avg_corr_seizure_path}, {self.avg_corr_non_seizure_path}")
+                    # self.diff_corr_matrix remains None, will be handled in _create_relevance_diff_correlation_edges
+                except Exception as e:
+                    logger.error(f"Error processing average correlation matrices: {e}")
+                    # self.diff_corr_matrix remains None
+            else:
+                logger.warning("Paths for average seizure and/or non-seizure correlation matrices not provided for 'relevance_diff_correlation' strategy. Required: avg_corr_seizure_path and avg_corr_non_seizure_path.")
+                # self.diff_corr_matrix remains None
         
         # Initialize graph feature extractor if requested
         if self.extract_graph_features:
             logger.info("Initializing graph feature extractor...")
             self.graph_feature_extractor = GraphFeatureExtractor(
-                include_node_features=True,
+                include_node_features=self.include_node_features,
                 include_graph_features=True,
                 feature_types=graph_feature_types
             )
@@ -486,6 +541,9 @@ class GraphEEGDataset(Dataset):
         elif self.edge_strategy == "correlation":
             logger.debug("Creating edges based on correlation")
             return self._create_correlation_edges(signal_data_np)
+        elif self.edge_strategy == "relevance_diff_correlation":
+            logger.debug("Creating edges based on relevance difference correlation")
+            return self._create_relevance_diff_correlation_edges()
         else:
             raise ValueError(f"Unknown edge strategy: {self.edge_strategy}")
 
@@ -602,6 +660,82 @@ class GraphEEGDataset(Dataset):
 
         edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
         logger.debug(f"Created {edge_index.shape[1]} correlation edges")
+        return edge_index
+
+    def _create_relevance_diff_correlation_edges(self) -> torch.Tensor:
+        """
+        Creates edges based on the absolute difference between pre-computed average
+        seizure and non-seizure correlation matrices. This difference represents
+        channel relevance change.
+
+        - If self.top_k is set: connects each node to its top-k most relevant neighbors (symmetric).
+        - Otherwise: connects all pairs with relevance difference >= self.correlation_threshold (symmetric).
+
+        Returns:
+            torch.Tensor: Edge index tensor (2, num_edges)
+        """
+        if self.diff_corr_matrix is None:
+            logger.warning(
+                "Difference correlation matrix is not available (e.g., due to missing files or load errors). "
+                "Returning empty edge index for 'relevance_diff_correlation' strategy."
+            )
+            return torch.empty((2, 0), dtype=torch.long)
+
+        # Ensure the diff_corr_matrix is a numpy array (it should be by construction)
+        # Check for NaN/Inf in diff_corr_matrix
+        if np.isnan(self.diff_corr_matrix).any() or np.isinf(self.diff_corr_matrix).any():
+            logger.warning(
+                "Invalid values (NaN/Inf) in difference correlation matrix. "
+                "Returning empty edge index."
+            )
+            return torch.empty((2, 0), dtype=torch.long)
+
+        num_channels = self.n_channels
+        edge_list = []
+
+        if self.top_k:
+            logger.debug(f"Creating top-{self.top_k} relevance difference connections using diff_corr_matrix")
+            adj_dict = defaultdict(set)
+
+            for i in range(num_channels):
+                # Sort by relevance difference in descending order.
+                # np.argsort returns indices that would sort the array.
+                # -self.diff_corr_matrix[i] makes it sort in descending order.
+                sorted_neighbor_indices = np.argsort(-self.diff_corr_matrix[i])
+                
+                count = 0
+                for j_idx in sorted_neighbor_indices:
+                    j = int(j_idx)  # Convert numpy.int64 to int for consistency
+                    if i == j:  # Skip self-loops
+                        continue
+                    
+                    if count < self.top_k:
+                        adj_dict[i].add(j)
+                        adj_dict[j].add(i)  # Ensure symmetry
+                        count += 1
+                    else:
+                        break  # Found top_k neighbors for node i
+            
+            for i, neighbors in adj_dict.items():
+                for j_neighbor in neighbors:
+                    edge_list.append([i, j_neighbor])
+        else:
+            logger.debug(
+                f"Creating relevance difference connections with threshold {self.correlation_threshold} "
+                f"using diff_corr_matrix"
+            )
+            for i in range(num_channels):
+                for j in range(i + 1, num_channels):  # Iterate upper triangle
+                    if self.diff_corr_matrix[i, j] >= self.correlation_threshold:
+                        edge_list.append([i, j])
+                        edge_list.append([j, i])  # Add symmetric edge
+
+        if not edge_list:
+            logger.debug("No edges created based on relevance difference correlation strategy.")
+            return torch.empty((2, 0), dtype=torch.long)
+
+        edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        logger.debug(f"Created {edge_index.shape[1]} relevance difference correlation edges")
         return edge_index
 
     def len(self) -> int:

@@ -96,8 +96,8 @@ class EEGCNNBiLSTMGCN(nn.Module):
         )
 
         # Initialize the Graph Convolutional Network.
-        # Its input dimension (in_channels) will be the output dimension
-        # produced by the channel_encoder (lstm_out_dim).
+        # Input dimension is the output of the LSTM encoder (lstm_out_dim).
+        # The GCN will process the node features extracted by the LSTM encoder.
         self.gcn = EEGGCN(
             in_channels=lstm_out_dim,
             hidden_channels=hidden_dim,    # Use hidden_dim as hidden_channels
@@ -106,11 +106,11 @@ class EEGCNNBiLSTMGCN(nn.Module):
             pooling_type=pooling_type,
             dropout_prob=gcn_dropout,
             use_batch_norm=gcn_use_batch_norm,
-            use_cnn_preprocessing=False,
-            mlp_dims=None,  # Disable the built-in classifier to get features instead of logits
+            use_cnn_preprocessing=False, # no feature reduction since we use directly the LSTM output
+            mlp_dims=None, # Disable built-in classifier, as we need a more complex one
         )
 
-        # Classifier layer
+        # Classifier layers to map GCN output to class logits.
         self.classifier = nn.Sequential(
             nn.Linear(classifier_input_dim, hidden_dim // 2),
             nn.ReLU(),
@@ -147,24 +147,12 @@ class EEGCNNBiLSTMGCN(nn.Module):
         Returns:
             torch.Tensor: Class logits for each graph in the batch. Shape: [num_graphs_in_batch, num_classes].
         """
-        # The input 'x' represents a batch of EEG recordings,
-        # where each recording has multiple channels (nodes) and time steps.
-        # x shape: [num_graphs_in_batch * num_channels, time_steps]
-
-        # Encode each channel's time series into a fixed-size embedding.
-        # The output `node_features` will have shape:
-        # [num_graphs_in_batch * num_channels, lstm_out_dim]
         node_features = self.channel_encoder(x)
-
-        # Pass the extracted node features (embeddings) and the graph structure
-        # (edge_index and batch tensors) to the GCN.
-        # With mlp_dims=None, GCN returns features instead of logits
-        gcn_output = self.gcn(node_features, edge_index, batch)
-        
-        # gcn_output should have shape: [num_graphs_in_batch, out_channels]
+        gcn_output = self.gcn(node_features, edge_index, batch) # [num_graphs_in_batch, out_channels]
         
         # Combine with graph-level features if available
         if self.use_graph_features:
+            # check if graph features have been loaded
             if graph_features is None:
                 raise ValueError(
                     "EEGCNNBiLSTMGCN is configured to use graph features (self.use_graph_features is True), "

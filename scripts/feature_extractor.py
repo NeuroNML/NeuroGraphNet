@@ -609,10 +609,7 @@ def _extract_segment_features(segment_signal: np.ndarray, fs: int = 250) -> np.n
         all_channel_features.extend(ch_feats)
 
     features_array = np.asarray(all_channel_features, dtype=float)
-    
-    # If the number of actual channels differs from a fixed expectation,
-    # the total length of features_array will vary. This is handled later during DataFrame creation.
-    # For now, just ensure NaNs/Infs are handled.
+    # handle possible NaN that can occur in features extraction
     return np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
 
 
@@ -823,8 +820,8 @@ def main(verbose: bool = False, max_workers: Optional[int] = None):
         print(f"   Test segments: {test_segments_df.shape}")
 
     SAMPLING_RATE = 250
-    BANDPASS_FREQS = (0.5, 50.0) # Consistent with Gamma band upper limit
-    NOTCH_FILTER_HZ = 60.0 # Or 50.0 depending on region of data origin
+    BANDPASS_FREQS = (0.5, 50.0)
+    NOTCH_FILTER_HZ = 60.0 # TUSZ dataset is from USA, so 60Hz is typical for power line noise
     NOTCH_Q = 30.0
 
     print(f"\n🔧 Designing filters: BP={BANDPASS_FREQS}Hz, Notch={NOTCH_FILTER_HZ}Hz (Q={NOTCH_Q}), FS={SAMPLING_RATE}Hz")
