@@ -703,7 +703,7 @@ def process_session_for_features(
     # signal normalization
     processed_signal_data = normalize(processed_signal_data)
 
-    if verbose: print(f"    ✅ Filtering, CAR Rereferencing & Normalization done in {time.time() - filter_proc_start:.2f}s")
+    if verbose: print(f"    ✅ Filtering, Rereferencing & Normalization done in {time.time() - filter_proc_start:.2f}s")
 
     processed_segment_count = 0
     valid_segment_features_count = 0
@@ -762,10 +762,10 @@ def process_session_for_features(
 
 
 # --- Main Execution Logic ---
-IS_SCITAS = True # User specific: Set to True if running on SCITAS environment
+IS_SCITAS = False # User specific: Set to True if running on SCITAS environment
 CPU_COUNT = multiprocessing.cpu_count()
 
-def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[int] = None):
+def main(verbose: bool = False, max_workers: Optional[int] = None):
     overall_pipeline_start_time = time.time()
     print(f"\n🧠 EEG FEATURE EXTRACTION PIPELINE")
     print(f"{'='*60}")
@@ -779,7 +779,7 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     if max_workers is None:
         max_workers = max(1, CPU_COUNT - 1 if CPU_COUNT > 1 else 1)
     max_workers = min(max_workers, CPU_COUNT, 16) # Cap workers, e.g., at 16 or a reasonable number
-    print(f"🔧 Config: verbose={verbose}, test_mode={test_mode}, max_workers={max_workers}")
+    print(f"🔧 Config: verbose={verbose}, max_workers={max_workers}")
     
     # Define data paths
     # Adjust paths if not running from the project root or if data is elsewhere
@@ -798,7 +798,6 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     (OUTPUT_DATA_ROOT / "extracted_features").mkdir(parents=True, exist_ok=True)
     (OUTPUT_DATA_ROOT / "labels").mkdir(parents=True, exist_ok=True)
     
-    if test_mode: print(f"\n🧪 TEST MODE ENABLED - Processing limited data samples.")
     if verbose:
         print(f"\n📊 EEG FEATURE EXTRACTION DETAILS:")
         print(f"   Features per channel: {features_per_channel}")
@@ -844,10 +843,6 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
             raise ValueError(f"Could not find '{grouping_cols[0]}' and '{grouping_cols[1]}' for grouping in training data.")
         
         if verbose: print(f"   Total training session groups: {len(train_session_groups_list)}")
-        if test_mode and train_session_groups_list:
-            num_test_sessions = max(1, min(5, len(train_session_groups_list)))
-            train_session_groups_list = train_session_groups_list[:num_test_sessions]
-            print(f"   🧪 TEST MODE: Reduced to {len(train_session_groups_list)} training sessions.")
     except Exception as e_group:
         print(f"❌ Error during training set grouping: {e_group}. Check DataFrame structure.")
         sys.exit(1)
@@ -921,10 +916,6 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
         else: raise ValueError(f"Could not find '{grouping_cols[0]}' and '{grouping_cols[1]}' for grouping in test data.")
         
         if verbose: print(f"   Total test session groups: {len(test_session_groups_list)}")
-        if test_mode and test_session_groups_list:
-            num_test_sessions = max(1, min(5, len(test_session_groups_list)))
-            test_session_groups_list = test_session_groups_list[:num_test_sessions]
-            print(f"   🧪 TEST MODE: Reduced to {len(test_session_groups_list)} test sessions.")
     except Exception as e_group_test:
         print(f"❌ Error during test set grouping: {e_group_test}. Check DataFrame structure.")
         sys.exit(1)
@@ -1049,8 +1040,7 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
 if __name__ == "__main__":
     # Configure run parameters here:
     run_verbose = True  # Set to True for detailed logs
-    run_test_mode = False # Set to True to process only a few sessions for quick testing
     run_max_workers = max(1, multiprocessing.cpu_count() - 2) # Leave 2 cores for system stability
 
     # Run the main feature extraction pipeline
-    main(verbose=run_verbose, test_mode=run_test_mode, max_workers=run_max_workers if not run_test_mode else 2)
+    main(verbose=run_verbose, max_workers=run_max_workers)
