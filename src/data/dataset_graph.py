@@ -299,7 +299,9 @@ class GraphEEGDataset(Dataset):
         logger.info("Starting feature processing...")
         start_time = time.time()
 
-        extracted_features = np.load(self.extracted_features_dir / "X_train_DE.npy")
+        features_file = "X_train.npy" if not self.is_test else "X_test.npy"
+        print(f"Loading features from {features_file}...")
+        extracted_features = np.load(self.extracted_features_dir / features_file)
         logger.info(f"Loaded features shape: {extracted_features.shape}")
         
         processed_count = 0
