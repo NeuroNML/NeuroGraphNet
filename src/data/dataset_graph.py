@@ -52,8 +52,7 @@ class GraphEEGDataset(Dataset):
         extract_graph_features: bool = False,  # New parameter to control graph feature extraction
         graph_feature_types: Optional[List[str]] = None,  # Types of graph features to extract
         graph_feature_include_node_features: bool = False,  # Include node features in graph features
-        avg_corr_seizure_path: Optional[Path] = None,
-        avg_corr_non_seizure_path: Optional[Path] = None,
+        diff_corr_matrix_path: Optional[Path] = None,
     ):
         """
         Custom PyTorch Geometric dataset for EEG data.
@@ -87,8 +86,7 @@ class GraphEEGDataset(Dataset):
         logger.info(f"  - Sampling rate: {sampling_rate}")
         logger.info(f"  - Test mode: {is_test}")
         logger.info(f"  - Extract graph features: {extract_graph_features}")
-        logger.info(f"  - Avg Seizure Corr Path: {avg_corr_seizure_path}")
-        logger.info(f"  - Avg Non-Seizure Corr Path: {avg_corr_non_seizure_path}")
+        logger.info(f"  - Diff Corr Matrix Path: {diff_corr_matrix_path}")
 
         self.root = root
         self.clips = clips
@@ -112,51 +110,34 @@ class GraphEEGDataset(Dataset):
         self.extract_graph_features = extract_graph_features
         self.include_node_features = graph_feature_include_node_features
         
-        self.avg_corr_seizure_path = avg_corr_seizure_path
-        self.avg_corr_non_seizure_path = avg_corr_non_seizure_path
+        self.diff_corr_matrix_path = diff_corr_matrix_path
         self.avg_corr_seizure: Optional[np.ndarray] = None
         self.avg_corr_non_seizure: Optional[np.ndarray] = None
         self.diff_corr_matrix: Optional[np.ndarray] = None
 
         if self.edge_strategy == "relevance_diff_correlation":
             logger.info("Edge strategy: relevance_diff_correlation. Loading average correlation matrices.")
-            if self.avg_corr_seizure_path and self.avg_corr_non_seizure_path:
+            if self.diff_corr_matrix_path is not None:
                 try:
                     # Ensure paths are strings for np.load if they are Path objects
-                    seizure_path_str = str(self.avg_corr_seizure_path)
-                    non_seizure_path_str = str(self.avg_corr_non_seizure_path)
-
-                    self.avg_corr_seizure = np.load(seizure_path_str)
-                    if self.avg_corr_seizure is None:
-                        logger.error(f"Failed to load average seizure correlation matrix from {seizure_path_str}. It is None.")
-                        raise ValueError("Average seizure correlation matrix cannot be None.")
-                    logger.info(f"Loaded average seizure correlation matrix from {seizure_path_str}, shape: {self.avg_corr_seizure.shape}")
-                    self.avg_corr_non_seizure = np.load(non_seizure_path_str)
-                    if self.avg_corr_non_seizure is None:
-                        logger.error(f"Failed to load average non-seizure correlation matrix from {non_seizure_path_str}. It is None.")
-                        raise ValueError("Average non-seizure correlation matrix cannot be None.")
-                    logger.info(f"Loaded average non-seizure correlation matrix from {non_seizure_path_str}, shape: {self.avg_corr_non_seizure.shape}")
-
-                    if self.avg_corr_seizure is None or self.avg_corr_non_seizure is None:
-                        logger.error("One or both average correlation matrices are None. Check the files.")
-                        raise ValueError("Average correlation matrices cannot be None.")
-
-                    if self.avg_corr_seizure.shape != self.avg_corr_non_seizure.shape:
-                        logger.error(f"Shapes of average seizure ({self.avg_corr_seizure.shape}) and non-seizure ({self.avg_corr_non_seizure.shape}) correlation matrices do not match!")
-                        raise ValueError("Average correlation matrices shape mismatch.")
+                    diff_corr_matrix_path_str = str(self.diff_corr_matrix_path)
                     
-                    if self.avg_corr_seizure.shape[0] != self.n_channels or self.avg_corr_seizure.shape[1] != self.n_channels:
-                         logger.error(f"Shape of average correlation matrices ({self.avg_corr_seizure.shape}) does not match n_channels ({self.n_channels})!")
-                         raise ValueError(f"Average correlation matrices shape ({self.avg_corr_seizure.shape}) does not match n_channels ({self.n_channels}).")
-
-                    self.diff_corr_matrix = np.abs(self.avg_corr_seizure - self.avg_corr_non_seizure)
-                    logger.info(f"Computed difference correlation matrix, shape: {self.diff_corr_matrix.shape}")
-
+                    # load csv dataframe
+                    abs_diff_corr_matrix = pd.read_csv(diff_corr_matrix_path_str, index_col=0)
+                    if abs_diff_corr_matrix is None:
+                        logger.error(f"Failed to load absolute difference correlation matrix from {diff_corr_matrix_path_str}. It is None.")
+                        raise ValueError("Absolute difference correlation matrix cannot be None.")
+                    logger.info(f"Loaded absolute difference correlation matrix from {diff_corr_matrix_path_str}, shape: {abs_diff_corr_matrix.shape}")
+                    np_matrix = abs_diff_corr_matrix.to_numpy()
+                    if np_matrix.shape != (19, 19):
+                        logger.error(f"Absolute difference correlation matrix shape is {np_matrix.shape}, expected (19, 19).")
+                        raise ValueError("Absolute difference correlation matrix must be of shape (19, 19).")
+                    self.diff_corr_matrix = np_matrix
                 except FileNotFoundError as e:
-                    logger.error(f"Could not load average correlation matrix: {e}. Check paths: {self.avg_corr_seizure_path}, {self.avg_corr_non_seizure_path}")
+                    logger.error(f"Could not load absolute difference correlation matrix from {diff_corr_matrix_path_str}: {e}")
                     # self.diff_corr_matrix remains None, will be handled in _create_relevance_diff_correlation_edges
                 except Exception as e:
-                    logger.error(f"Error processing average correlation matrices: {e}")
+                    logger.error(f"Error processing absolute difference correlation matrix: {e}")
                     # self.diff_corr_matrix remains None
             else:
                 logger.warning("Paths for average seizure and/or non-seizure correlation matrices not provided for 'relevance_diff_correlation' strategy. Required: avg_corr_seizure_path and avg_corr_non_seizure_path.")
