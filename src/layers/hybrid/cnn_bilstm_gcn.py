@@ -161,10 +161,17 @@ class EEGCNNBiLSTMGCN(nn.Module):
         # With mlp_dims=None, GCN returns features instead of logits
         gcn_output = self.gcn(node_features, edge_index, batch)
         
-        # gcn_output should have shape: [num_graphs_in_batch, hidden_dim]
+        # gcn_output should have shape: [num_graphs_in_batch, out_channels]
         
         # Combine with graph-level features if available
-        if self.use_graph_features and graph_features is not None:
+        if self.use_graph_features:
+            if graph_features is None:
+                raise ValueError(
+                    "EEGCNNBiLSTMGCN is configured to use graph features (self.use_graph_features is True), "
+                    "but graph_features were not provided (is None) in the forward pass. "
+                    f"GCN output has {gcn_output.shape[-1]} features, classifier expects "
+                    f"{self.classifier[0].in_features} features."
+                )
             # Concatenate node-level aggregated features with graph-level features
             combined_features = torch.cat([gcn_output, graph_features], dim=1)
         else:
