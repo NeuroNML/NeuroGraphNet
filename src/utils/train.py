@@ -413,8 +413,6 @@ def train_model(
                     # get graph features if available
                     if hasattr(curr_batch, 'graph_features'):
                         graph_features = curr_batch.graph_features
-                        if graph_features is not None:
-                            logger.info(f"Graph features shape: {graph_features.shape}")
                     else:
                         graph_features = None
 
