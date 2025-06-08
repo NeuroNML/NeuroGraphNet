@@ -765,17 +765,21 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     print(f"🔧 Config: verbose={verbose}, test_mode={test_mode}, max_workers={max_workers}")
     
     # Define data paths
-    # Adjust DATA_ROOT if not running from the project root or if data is elsewhere
+    # Adjust paths if not running from the project root or if data is elsewhere
     project_root = Path(__file__).resolve().parent.parent if "__file__" in locals() else Path.cwd()
     LOCAL_DATA_ROOT = project_root / "data"
     
     # SCITAS path needs to be configured by the user if IS_SCITAS is True
     SCITAS_DATA_ROOT = Path("/home/ogut/data") # Placeholder: User should configure this
-    DATA_ROOT = SCITAS_DATA_ROOT if IS_SCITAS else LOCAL_DATA_ROOT
     
-    print(f"🔍 Using DATA_ROOT: {DATA_ROOT.resolve()}")
-    (DATA_ROOT / "extracted_features").mkdir(parents=True, exist_ok=True)
-    (DATA_ROOT / "labels").mkdir(parents=True, exist_ok=True)
+    # Separate input (read) and output (write) paths
+    INPUT_DATA_ROOT = SCITAS_DATA_ROOT if IS_SCITAS else LOCAL_DATA_ROOT  # Where to read input data from
+    OUTPUT_DATA_ROOT = LOCAL_DATA_ROOT  # Where to write output files (always local)
+    
+    print(f"🔍 Using INPUT_DATA_ROOT: {INPUT_DATA_ROOT.resolve()}")
+    print(f"🔍 Using OUTPUT_DATA_ROOT: {OUTPUT_DATA_ROOT.resolve()}")
+    (OUTPUT_DATA_ROOT / "extracted_features").mkdir(parents=True, exist_ok=True)
+    (OUTPUT_DATA_ROOT / "labels").mkdir(parents=True, exist_ok=True)
     
     if test_mode: print(f"\n🧪 TEST MODE ENABLED - Processing limited data samples.")
     if verbose:
@@ -786,11 +790,11 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
         print(f"{'='*50}\n")
 
     try:
-        clips_tr_full_df = pd.read_parquet(DATA_ROOT / "train" / "segments.parquet")
-        clips_te_full_df = pd.read_parquet(DATA_ROOT / "test" / "segments.parquet")
+        clips_tr_full_df = pd.read_parquet(INPUT_DATA_ROOT / "train" / "segments.parquet")
+        clips_te_full_df = pd.read_parquet(INPUT_DATA_ROOT / "test" / "segments.parquet")
         if verbose: print(f"✅ Loaded segment metadata: Train {clips_tr_full_df.shape}, Test {clips_te_full_df.shape}")
     except FileNotFoundError as e:
-        print(f"❌ CRITICAL Error: Segments.parquet file not found. Path: {e.filename}. Ensure data is in {DATA_ROOT}/train and {DATA_ROOT}/test.")
+        print(f"❌ CRITICAL Error: Segments.parquet file not found. Path: {e.filename}. Ensure data is in {INPUT_DATA_ROOT}/train and {INPUT_DATA_ROOT}/test.")
         sys.exit(1)
 
     clips_tr_full_df = ensure_eeg_multiindex(clips_tr_full_df, id_col_name='id')
@@ -841,7 +845,7 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
                 n_jobs=max_workers, verbose=(10 if verbose else 0), timeout=7200, prefer="processes"
             )(
                 delayed(process_session_for_features)(
-                    session_grp, DATA_ROOT / "train", SAMPLING_RATE,
+                    session_grp, INPUT_DATA_ROOT / "train", SAMPLING_RATE,
                     num_channels_expected=expected_channels, verbose=verbose
                 )
                 for session_grp in tqdm(train_session_groups_list, desc="Train Sessions")
@@ -918,7 +922,7 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
                 n_jobs=max_workers, verbose=(10 if verbose else 0), timeout=3600, prefer="processes"
             )(
                 delayed(process_session_for_features)(
-                    session_grp, DATA_ROOT / "test", SAMPLING_RATE,
+                    session_grp, INPUT_DATA_ROOT / "test", SAMPLING_RATE,
                     num_channels_expected=expected_channels, verbose=verbose
                 )
                 for session_grp in tqdm(test_session_groups_list, desc="Test Sessions")
@@ -994,8 +998,8 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     print(f"Train Subject IDs: {train_subject_ids_np.shape if len(train_subject_ids_np) > 0 else 'Empty'}")
 
     print("\n💾 Saving extracted feature arrays...")
-    output_features_path = DATA_ROOT / "extracted_features"
-    output_labels_path = DATA_ROOT / "labels"
+    output_features_path = OUTPUT_DATA_ROOT / "extracted_features"
+    output_labels_path = OUTPUT_DATA_ROOT / "labels"
 
     if X_test_np.size > 0: 
         np.save(output_features_path / "X_test.npy", X_test_np)
@@ -1021,7 +1025,7 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     else: 
         print("   train subject IDs is empty, not saving.")
 
-    print(f"\n✅ Feature extraction and saving complete to {DATA_ROOT.resolve()}.")
+    print(f"\n✅ Feature extraction and saving complete to {OUTPUT_DATA_ROOT.resolve()}.")
     print(f"⏰ Total pipeline execution time: {time.time() - overall_pipeline_start_time:.2f} seconds.")
 
 
