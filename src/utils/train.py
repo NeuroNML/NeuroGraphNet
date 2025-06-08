@@ -1,8 +1,9 @@
 from collections import OrderedDict, defaultdict # Added defaultdict
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Union
 import time  # Add time import
 import logging  # Add logging import
+import inspect  # Add inspect for checking function signatures
 
 import pandas as pd
 import torch
@@ -11,6 +12,7 @@ import torch.optim as optim
 from tqdm import tqdm
 from torchmetrics.functional import accuracy, f1_score, auroc 
 from torch_geometric.utils import to_dense_batch
+from data.geodataloader import GeoDataLoader
 from src.data.dataset_graph import GraphEEGDataset 
 
 # Import wandb with optional fallback
@@ -110,11 +112,51 @@ def _load(
     return full_checkpoint_data # Return the loaded (or reconstructed) checkpoint data
 
 
+def _safe_model_call(model, x, edge_index=None, batch=None, graph_features=None):
+    """
+    Safely call a model with appropriate parameters based on its forward method signature.
+    
+    Args:
+        model: The PyTorch model to call
+        x: Node features
+        edge_index: Graph edge indices (for GNN models)
+        batch: Batch indices (for GNN models)
+        graph_features: Graph-level features (optional)
+    
+    Returns:
+        Model output
+    """
+    # Get the model's forward method signature
+    forward_signature = inspect.signature(model.forward)
+    params = forward_signature.parameters
+    
+    # Base call arguments for GNN models
+    if edge_index is not None and batch is not None:
+        call_args = [x, edge_index, batch]
+        call_kwargs = {}
+        
+        # Check if model accepts graph_features parameter
+        if 'graph_features' in params and graph_features is not None:
+            call_kwargs['graph_features'] = graph_features
+            
+        return model(*call_args, **call_kwargs)
+    else:
+        # Non-GNN models - just pass x
+        call_args = [x]
+        call_kwargs = {}
+        
+        # Some non-GNN models might still accept graph_features
+        if 'graph_features' in params and graph_features is not None:
+            call_kwargs['graph_features'] = graph_features
+            
+        return model(*call_args, **call_kwargs)
+
+
 # --- Training and Evaluation Loop ---
 def train_model(
     model: nn.Module,
-    train_loader: torch.utils.data.DataLoader,
-    val_loader: torch.utils.data.DataLoader,
+    train_loader: Union[torch.utils.data.DataLoader, GeoDataLoader],
+    val_loader: Union[torch.utils.data.DataLoader, GeoDataLoader],
     criterion: nn.Module,
     optimizer: optim.Optimizer,
     device: torch.device,
@@ -175,7 +217,7 @@ def train_model(
             config.update(wandb_config)
 
         try:
-            wandb_run = wandb.init(
+            wandb_run = wandb.init( # type: ignore
                 project=wandb_project or "neuro-graph-net",
                 name=wandb_run_name,
                 config=config,
@@ -185,8 +227,8 @@ def train_model(
             logger.info(f"🔗 Wandb run initialized: {wandb_run.name}")
 
             # Watch the model for gradient and parameter tracking
-            wandb.watch(model, log='all', log_freq=100)
-            print(f"🔗 Wandb initialized: {wandb.run.name}")
+            wandb.watch(model, log='all', log_freq=100) # type: ignore
+            print(f"🔗 Wandb initialized: {wandb.run.name}") # type: ignore
             
             # Log dataset information to wandb if available
             if original_dataset is not None:
@@ -278,7 +320,7 @@ def train_model(
                         logger.warning(f"Could not extract clips information: {e}")
                 
                 # Log the dataset configuration to wandb
-                wandb.config.update(dataset_config)
+                wandb.config.update(dataset_config) # type: ignore
                 logger.info(f"Logged {len(dataset_config)} dataset parameters to wandb")
                 
         except Exception as e:
@@ -368,10 +410,20 @@ def train_model(
                     raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
                 
                 try:
-                    # cast y_targets to int64 (needed)
-                    logits = model(curr_batch.x.float(),
-                                 curr_batch.edge_index,
-                                 curr_batch.batch)
+                    # get graph features if available
+                    if hasattr(curr_batch, 'graph_features'):
+                        graph_features = curr_batch.graph_features
+                        if graph_features is not None:
+                            logger.info(f"Graph features shape: {graph_features.shape}")
+                    else:
+                        graph_features = None
+
+                    # Use safe model call that handles graph_features parameter automatically
+                    logits = _safe_model_call(model, 
+                                            curr_batch.x.float(),
+                                            curr_batch.edge_index,
+                                            curr_batch.batch,
+                                            graph_features)
                     # unsqueeze y_targets to match the shape of the logits. used later!
                 except Exception as e:
                     logger.error(f"Error in forward pass for batch {batch_idx}: {str(e)}")
@@ -384,13 +436,20 @@ def train_model(
                     x_batch = x_batch.to(device)
                     y_targets = y_batch.to(device) if isinstance(y_batch, torch.Tensor) else torch.tensor(y_batch, device=device)
                     y_targets = y_targets.reshape(-1, 1)
-                    logits = model(x_batch.float())
+                    # Use safe model call for non-GNN models
+                    logits = _safe_model_call(model, x_batch.float())
                 elif hasattr(data_batch_item, 'x') and hasattr(data_batch_item, 'y'):
                     if not to_dense_batch: # Should be caught earlier if PyG not installed but good check
                          raise ImportError("PyTorch Geometric 'to_dense_batch' is required for this non-GNN path if data is PyG Batch.")
                     curr_batch = data_batch_item.to(device) # type: ignore
                     y_targets = curr_batch.y.reshape(-1, 1)
                     if y_targets is None: continue
+                    
+                    # Extract graph features if available
+                    if hasattr(curr_batch, 'graph_features'):
+                        graph_features = curr_batch.graph_features
+                    else:
+                        graph_features = None
                     
                     n_channels = 19 # This was hardcoded, consider making it a parameter or inferring
                     assert n_channels > 0, "n_channels must be a positive integer."
@@ -405,7 +464,8 @@ def train_model(
                             input_features, _ = to_dense_batch(node_features_tensor, curr_batch.batch, max_num_nodes=n_channels)
                     elif curr_batch.num_graphs == 0: raise ValueError("Empty batch encountered.")
                     else: raise ValueError(f"Unexpected num_graphs: {curr_batch.num_graphs}.")
-                    logits = model(input_features.float())
+                    # Use safe model call that can handle graph_features if the model supports it
+                    logits = _safe_model_call(model, input_features.float(), graph_features=graph_features)
                 else:
                     raise ValueError("Batch data must be a tuple (x, y) or have 'x' and 'y' attributes for non-GNN mode.")
 
@@ -460,7 +520,7 @@ def train_model(
                 train_history['f1'].append(f1_score(binary_preds, targets_cat_train, task="binary").item())
                 
                 # AUROC on probabilities
-                train_history['auroc'].append(auroc(preds_cat_train, targets_cat_train, task="binary").item())
+                train_history['auroc'].append(auroc(preds_cat_train, targets_cat_train, task="binary").item()) # type: ignore
                 
                 # Log metric values for debugging
                 logger.debug(f"Epoch {epoch} metrics - Acc: {train_history['acc'][-1]:.4f}, F1: {train_history['f1'][-1]:.4f}, AUROC: {train_history['auroc'][-1]:.4f}")
@@ -488,9 +548,19 @@ def train_model(
                     if y_targets is None: continue
                     if not (hasattr(curr_batch, 'x') and hasattr(curr_batch, 'edge_index')):
                          raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
-                    logits = model(curr_batch.x.float(),
-                                   curr_batch.edge_index,
-                                   curr_batch.batch)
+                    
+                    # Extract graph features if available (same as training)
+                    if hasattr(curr_batch, 'graph_features'):
+                        graph_features = curr_batch.graph_features
+                    else:
+                        graph_features = None
+                    
+                    # Use safe model call that handles graph_features parameter automatically
+                    logits = _safe_model_call(model,
+                                            curr_batch.x.float(),
+                                            curr_batch.edge_index,
+                                            curr_batch.batch,
+                                            graph_features)
                 else: # Non-GNN
                     if isinstance(data_batch_item_val, (tuple, list)) and len(data_batch_item_val) == 2:
                         x_batch_val, y_batch_val = data_batch_item_val
@@ -499,11 +569,18 @@ def train_model(
                             y_targets = y_batch_val.to(device) if isinstance(y_batch_val, torch.Tensor) else torch.tensor(y_batch_val, device=device)
                             y_targets = y_targets.reshape(-1, 1)
                         else: continue # Skip if no labels in validation
-                        logits = model(x_batch_val.float())
+                        # Use safe model call for non-GNN models too
+                        logits = _safe_model_call(model, x_batch_val.float())
                     elif hasattr(data_batch_item_val, 'x') and hasattr(data_batch_item_val, 'y'):
                         curr_batch = data_batch_item_val.to(device) # type: ignore
                         y_targets = curr_batch.y.reshape(-1, 1)
                         if y_targets is None: continue
+                        
+                        # Extract graph features if available
+                        if hasattr(curr_batch, 'graph_features'):
+                            graph_features = curr_batch.graph_features
+                        else:
+                            graph_features = None
                         
                         n_channels = 19 # This was hardcoded
                         assert n_channels > 0
@@ -518,7 +595,8 @@ def train_model(
                                 input_features_val, _ = to_dense_batch(node_features_tensor, curr_batch, max_num_nodes=n_channels)
                         elif curr_batch.num_graphs == 0: continue # Skip empty val batch
                         else: raise ValueError(f"Unexpected num_graphs in val: {curr_batch.num_graphs}.")
-                        logits = model(input_features_val.float())
+                        # Use safe model call that can handle graph_features if the model supports it
+                        logits = _safe_model_call(model, input_features_val.float(), graph_features=graph_features)
                     else:
                         raise ValueError("Val batch data must be a tuple (x, y) or have 'x' and 'y' attributes for non-GNN mode.")
 
@@ -597,7 +675,7 @@ def train_model(
                 f'best_{monitor}': best_score,
             }
             try:
-                wandb.log(wandb_metrics)
+                wandb.log(wandb_metrics) # type: ignore
             except Exception as e:
                 print(f"⚠️ Warning: Could not log to wandb: {e}")
 
@@ -701,19 +779,34 @@ def evaluate_model(
             
             # Handle ID extraction based on batch format
             current_ids = []
-            if not hasattr(batch_data, "id"):
+            if isinstance(batch_data, (tuple, list)):
+                # For tuple/list format, we need to handle this differently
+                # This suggests the test loader might not include IDs in tuple format
+                raise ValueError("Test batch data is in tuple format but ID extraction requires object with 'id' attribute. Check test dataset configuration.")
+            elif not hasattr(batch_data, "id"):
                 raise ValueError(f"Batch object missing ID attribute 'id'.")
-            if isinstance(batch_data.id, torch.Tensor):
-                current_ids.extend(batch_data.id.cpu().tolist())
             else:
-                current_ids.extend(batch_data.id)
+                if isinstance(batch_data.id, torch.Tensor):
+                    current_ids.extend(batch_data.id.cpu().tolist())
+                else:
+                    current_ids.extend(batch_data.id)
 
             if use_gnn:
                 if not (hasattr(batch_data, 'x') and hasattr(batch_data, 'edge_index')):
                      raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
-                logits = model(batch_data.x.float(), 
-                               batch_data.edge_index, 
-                               batch_data.batch)
+                
+                # Extract graph features if available
+                if hasattr(batch_data, 'graph_features'):
+                    graph_features = batch_data.graph_features
+                else:
+                    graph_features = None
+                
+                # Use safe model call for evaluation too
+                logits = _safe_model_call(model,
+                                        batch_data.x.float(), 
+                                        batch_data.edge_index, 
+                                        batch_data.batch,
+                                        graph_features)
             else:
                 # Handle non-GNN models based on input_type
                 if input_type == 'feature':
@@ -739,7 +832,6 @@ def evaluate_model(
                         logits = model(x_aggregated)
                     else:
                         raise ValueError("Batch data format not supported for feature input type.")
-                        
                 elif input_type == 'signal':
                     # Expected input shape: (batch_size, sensors, time_steps) e.g., (512, 19, 3000)
                     if isinstance(batch_data, (tuple, list)) and len(batch_data) == 2:
