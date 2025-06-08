@@ -13,6 +13,12 @@ from scipy import signal
 from tqdm import tqdm
 from scipy.signal import welch
 from scipy.stats import skew, kurtosis
+
+# Add project root to Python path for absolute imports
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from src.utils.signal import normalize, rereference, spectral_entropy, time_filtering
 from src.utils.index import ensure_eeg_multiindex
 
@@ -23,8 +29,9 @@ from src.utils.index import ensure_eeg_multiindex
 # Freq (5 Rel B_Pow): delta, theta, alpha, beta, gamma
 # Freq (5 Spectral): spec_ent, peak_freq, spec_edge_50, spec_edge_95, total_power
 # Freq (3 Ratios): alpha/beta, theta/alpha, delta/theta
-# Total = 12 + 5 + 5 + 5 + 3 = 30 features
-NUM_FEATURES_PER_CHANNEL_REF = 30
+# Advanced (5): decorr_time, lz_complexity, dfa_alpha, cross_corr_avg, pac_score
+# Total = 12 + 5 + 5 + 5 + 3 + 5 = 35 features
+NUM_FEATURES_PER_CHANNEL_REF = 35
 DEFAULT_EXPECTED_CHANNELS = 19 # Default, can be overridden if known
 
 # --- Core Feature Calculation Helper Functions ---
@@ -135,18 +142,17 @@ def _spectral_edge_frequency(freqs: np.ndarray, psd: np.ndarray, percentage_powe
     else: # Single frequency point
         cumulative_power = psd_sanitized * (freqs[0] if freqs.size > 0 else 1)
 
-
     threshold_abs_power = total_power * percentage_power
     
     # Find the first index where cumulative power exceeds or equals the threshold
     edge_indices = np.where(cumulative_power >= threshold_abs_power)[0]
     
     if edge_indices.size > 0:
-        return freqs[edge_indices[0]]
+        return float(freqs[edge_indices[0]])
     
     # If threshold is not met (e.g., percentage_power = 1.0 and numerical precision issues)
     # or if all power is concentrated at the very end.
-    return freqs[-1]
+    return float(freqs[-1])
 
 
 def _peak_frequency(freqs: np.ndarray, psd: np.ndarray) -> float:
@@ -156,18 +162,301 @@ def _peak_frequency(freqs: np.ndarray, psd: np.ndarray) -> float:
     if psd.size == 0: # Should be caught by previous, but defensive
         return 0.0
     peak_idx = np.argmax(psd)
-    return freqs[peak_idx]
+    return float(freqs[peak_idx])
+
+
+# --- Advanced EEG Feature Functions ---
+
+def _decorrelation_time(signal: np.ndarray, fs: int = 250, max_lag_sec: float = 2.0) -> float:
+    """
+    Calculate decorrelation time - the time lag at which autocorrelation drops to 1/e.
+    This measures temporal correlation structure and is sensitive to signal complexity.
+    """
+    if signal.size < 10:  # Need minimum samples
+        return 0.0
+    
+    # Remove DC component
+    signal_centered = signal - np.mean(signal)
+    if np.std(signal_centered) < 1e-10:  # Flat signal
+        return 0.0
+    
+    # Calculate maximum lag based on signal length and time constraint
+    max_lag_samples = min(len(signal) // 4, int(max_lag_sec * fs))
+    if max_lag_samples < 2:
+        return 0.0
+    
+    # Compute autocorrelation using numpy correlate
+    autocorr = np.correlate(signal_centered, signal_centered, mode='full')
+    autocorr = autocorr[len(autocorr)//2:]  # Take positive lags only
+    autocorr = autocorr[:max_lag_samples + 1]  # Limit to max_lag
+    
+    # Normalize by zero-lag value
+    if autocorr[0] <= 0:
+        return 0.0
+    autocorr_norm = autocorr / autocorr[0]
+    
+    # Find where autocorrelation drops to 1/e ≈ 0.368
+    threshold = 1.0 / np.e
+    below_threshold = np.where(autocorr_norm <= threshold)[0]
+    
+    if below_threshold.size > 0:
+        decorr_lag = below_threshold[0]
+        return float(decorr_lag / fs)  # Convert to seconds
+    else:
+        return float(max_lag_sec)  # If never drops below threshold
+
+
+def _lempel_ziv_complexity(signal: np.ndarray, normalize: bool = True) -> float:
+    """
+    Calculate Lempel-Ziv complexity - measures signal randomness and complexity.
+    Higher values indicate more complex, less predictable signals.
+    """
+    if signal.size < 2:
+        return 0.0
+    
+    # Binarize signal using median threshold
+    median_val = np.median(signal)
+    binary_seq = (signal > median_val).astype(int)
+    
+    # Convert to string for LZ algorithm
+    s = ''.join(map(str, binary_seq))
+    n = len(s)
+    
+    if n < 2:
+        return 0.0
+    
+    # Lempel-Ziv complexity calculation
+    complexity = 1
+    i = 0
+    
+    while i < n - 1:
+        j = 1
+        while i + j <= n:
+            # Check if current substring exists in previous part
+            substring = s[i:i + j]
+            if substring in s[:i + j - 1]:
+                j += 1
+            else:
+                break
+        complexity += 1
+        i += j
+    
+    if normalize:
+        # Normalize by theoretical maximum for random sequence
+        max_complexity = n / np.log2(n) if n > 1 else 1
+        return float(complexity / max_complexity)
+    else:
+        return float(complexity)
+
+
+def _detrended_fluctuation_analysis(signal: np.ndarray, min_scale: int = 4, max_scale: Optional[int] = None) -> float:
+    """
+    Calculate DFA alpha exponent - characterizes long-range temporal correlations.
+    Alpha ~0.5: uncorrelated (white noise)
+    Alpha ~1.0: 1/f noise (pink noise)
+    Alpha ~1.5: Brownian motion
+    """
+    if signal.size < 16:  # Need minimum samples for meaningful analysis
+        return 0.5  # Return uncorrelated value
+    
+    # Remove mean and integrate (cumulative sum)
+    signal_centered = signal - np.mean(signal)
+    integrated_signal = np.cumsum(signal_centered)
+    
+    n = len(integrated_signal)
+    if max_scale is None:
+        max_scale = n // 4
+    
+    # Ensure we have valid scale range
+    max_scale = min(max_scale, n // 4)
+    if max_scale <= min_scale:
+        return 0.5
+    
+    # Generate scales (box sizes) - logarithmically spaced
+    scales = np.unique(np.logspace(np.log10(min_scale), np.log10(max_scale), 
+                                 num=min(15, max_scale - min_scale + 1)).astype(int))
+    
+    if len(scales) < 3:  # Need minimum scales for linear fit
+        return 0.5
+    
+    fluctuations = []
+    
+    for scale in scales:
+        if scale >= n:
+            continue
+            
+        # Divide signal into non-overlapping boxes of size 'scale'
+        n_boxes = n // scale
+        box_fluctuations = []
+        
+        for i in range(n_boxes):
+            start_idx = i * scale
+            end_idx = (i + 1) * scale
+            box_data = integrated_signal[start_idx:end_idx]
+            
+            # Fit linear trend to box
+            x = np.arange(len(box_data))
+            if len(box_data) > 1:
+                trend = np.polyfit(x, box_data, 1)
+                detrended = box_data - np.polyval(trend, x)
+                box_fluctuations.append(np.sqrt(np.mean(detrended**2)))
+        
+        if box_fluctuations:
+            fluctuations.append(np.mean(box_fluctuations))
+    
+    if len(fluctuations) < 3:
+        return 0.5
+    
+    # Calculate DFA exponent (slope in log-log plot)
+    log_scales = np.log10(scales[:len(fluctuations)])
+    log_fluctuations = np.log10(np.array(fluctuations))
+    
+    # Remove any invalid values
+    valid_mask = np.isfinite(log_scales) & np.isfinite(log_fluctuations)
+    if np.sum(valid_mask) < 3:
+        return 0.5
+    
+    log_scales = log_scales[valid_mask]
+    log_fluctuations = log_fluctuations[valid_mask]
+    
+    # Linear fit to get DFA exponent
+    try:
+        slope, _ = np.polyfit(log_scales, log_fluctuations, 1)
+        return float(np.clip(slope, 0.0, 2.0))  # Clip to reasonable range
+    except:
+        return 0.5
+
+
+def _cross_correlation_channels(segment_data: np.ndarray, max_lag: int = 25) -> float:
+    """
+    Calculate average cross-correlation between all channel pairs.
+    Measures spatial connectivity and synchronization between channels.
+    """
+    if segment_data.ndim != 2 or segment_data.shape[1] < 2:
+        return 0.0  # Need at least 2 channels
+    
+    n_channels = segment_data.shape[1]
+    n_samples = segment_data.shape[0]
+    
+    if n_samples < max_lag * 2:
+        max_lag = min(max_lag, n_samples // 4)
+    
+    if max_lag < 1:
+        return 0.0
+    
+    correlations = []
+    
+    # Calculate cross-correlation for all unique channel pairs
+    for i in range(n_channels):
+        for j in range(i + 1, n_channels):
+            chan1 = segment_data[:, i]
+            chan2 = segment_data[:, j]
+            
+            # Remove DC component
+            chan1_centered = chan1 - np.mean(chan1)
+            chan2_centered = chan2 - np.mean(chan2)
+            
+            # Skip if either channel has no variance
+            if np.std(chan1_centered) < 1e-10 or np.std(chan2_centered) < 1e-10:
+                continue
+            
+            # Calculate cross-correlation
+            cross_corr = np.correlate(chan1_centered, chan2_centered, mode='full')
+            
+            # Normalize by signal norms
+            norm_factor = np.sqrt(np.sum(chan1_centered**2) * np.sum(chan2_centered**2))
+            if norm_factor > 1e-10:
+                cross_corr = cross_corr / norm_factor
+            
+            # Extract correlation around zero lag
+            center_idx = len(cross_corr) // 2
+            start_idx = max(0, center_idx - max_lag)
+            end_idx = min(len(cross_corr), center_idx + max_lag + 1)
+            
+            correlation_window = cross_corr[start_idx:end_idx]
+            
+            # Take maximum absolute correlation within the window
+            if correlation_window.size > 0:
+                max_corr = np.max(np.abs(correlation_window))
+                correlations.append(max_corr)
+    
+    if correlations:
+        return float(np.mean(correlations))
+    else:
+        return 0.0
+
+
+def _phase_amplitude_coupling(signal: np.ndarray, fs: int = 250, 
+                            low_freq_band: Tuple[float, float] = (4, 8),
+                            high_freq_band: Tuple[float, float] = (30, 50)) -> float:
+    """
+    Calculate phase-amplitude coupling (PAC) - measures coupling between 
+    low-frequency phase and high-frequency amplitude.
+    This is important for understanding cross-frequency interactions in EEG.
+    """
+    if signal.size < fs:  # Need at least 1 second of data
+        return 0.0
+    
+    try:
+        from scipy.signal import hilbert, sosfiltfilt, butter
+        import numpy as np
+    except ImportError:
+        return 0.0  # If scipy not available, return default
+    
+    # Design bandpass filters
+    nyquist = fs / 2
+    
+    # Low frequency filter (for phase)
+    if low_freq_band[1] >= nyquist:
+        return 0.0
+    low_sos = butter(4, [low_freq_band[0]/nyquist, low_freq_band[1]/nyquist], 
+                     btype='band', output='sos')
+    
+    # High frequency filter (for amplitude)
+    if high_freq_band[1] >= nyquist:
+        high_freq_band = (high_freq_band[0], nyquist - 1)
+    if high_freq_band[0] >= high_freq_band[1]:
+        return 0.0
+    high_sos = butter(4, [high_freq_band[0]/nyquist, high_freq_band[1]/nyquist], 
+                      btype='band', output='sos')
+    
+    try:
+        # Filter signals using sosfiltfilt
+        low_freq_signal = sosfiltfilt(low_sos, signal)
+        high_freq_signal = sosfiltfilt(high_sos, signal)
+        
+        # Extract phase from low frequency and amplitude from high frequency
+        low_analytic_signal = hilbert(low_freq_signal)
+        high_analytic_signal = hilbert(high_freq_signal)
+        
+        # Ensure we have arrays, not tuples
+        low_analytic_array = np.asarray(low_analytic_signal)
+        high_analytic_array = np.asarray(high_analytic_signal)
+        
+        low_phase = np.angle(low_analytic_array)
+        high_amplitude = np.abs(high_analytic_array)
+        
+        # Calculate mean vector length (phase-amplitude coupling strength)
+        # This is a simplified PAC measure
+        complex_coupling = high_amplitude * np.exp(1j * low_phase)
+        mean_vector_length = np.abs(np.mean(complex_coupling)) / np.mean(high_amplitude)
+        
+        return float(np.clip(mean_vector_length, 0.0, 1.0))
+        
+    except Exception:
+        return 0.0
 
 # --- Main Feature Extraction per Channel ---
 
 def _extract_channel_features(
     channel_signal: np.ndarray,
     fs: int,
-    bands: Dict[str, Tuple[float, float]]
+    bands: Dict[str, Tuple[float, float]],
+    all_channels_data: Optional[np.ndarray] = None
 ) -> List[float]:
     """
-    Extracts a focused set of EEG features from a single channel,
-    prioritizing those commonly used and effective for seizure detection.
+    Extracts a comprehensive set of EEG features from a single channel,
+    including advanced features for seizure detection.
     """
     # Need enough data for meaningful analysis, e.g., at least one full cycle of lowest band or for Welch window
     min_len_for_analysis = max(fs / bands.get("delta", (0.5,4))[0], fs * 0.5) # e.g. 0.5 sec for Welch
@@ -236,18 +525,43 @@ def _extract_channel_features(
             print(f"Debug: Welch PSD calculation or subsequent freq feature failed: {e}")
             pass
 
+    # === ADVANCED EEG FEATURES ===
+    # 1. Decorrelation time
+    decorr_time = _decorrelation_time(channel_signal, fs)
+    
+    # 2. Lempel-Ziv complexity
+    lz_complexity = _lempel_ziv_complexity(channel_signal)
+    
+    # 3. Detrended fluctuation analysis
+    dfa_alpha = _detrended_fluctuation_analysis(channel_signal)
+    
+    # 4. Cross-correlation between channels (if multi-channel data available)
+    cross_corr_avg = 0.0
+    if all_channels_data is not None and all_channels_data.ndim == 2:
+        cross_corr_avg = _cross_correlation_channels(all_channels_data)
+    
+    # 5. Phase-amplitude coupling
+    pac_score = _phase_amplitude_coupling(channel_signal, fs)
+
     features = [
+        # Time domain (12)
         mean_val, std_val, variance, rms_val, peak_to_peak,
         skewness, kurt_val, line_length, zero_cross_rate,
         hj_mob, hj_cmp, sample_ent,
+        # Absolute band powers (5)
         abs_band_powers.get("delta", 0.0), abs_band_powers.get("theta", 0.0),
         abs_band_powers.get("alpha", 0.0), abs_band_powers.get("beta", 0.0),
         abs_band_powers.get("gamma", 0.0),
+        # Relative band powers (5)
         rel_band_powers.get("delta", 0.0), rel_band_powers.get("theta", 0.0),
         rel_band_powers.get("alpha", 0.0), rel_band_powers.get("beta", 0.0),
         rel_band_powers.get("gamma", 0.0),
+        # Spectral features (5)
         spec_ent_val, peak_freq, spec_edge_50, spec_edge_95, total_power_val,
+        # Band ratios (3)
         alpha_beta_ratio, theta_alpha_ratio, delta_theta_ratio,
+        # Advanced features (5)
+        decorr_time, lz_complexity, dfa_alpha, cross_corr_avg, pac_score,
     ]
     
     if len(features) != NUM_FEATURES_PER_CHANNEL_REF:
@@ -263,7 +577,7 @@ def _extract_channel_features(
 
 
 def _extract_segment_features(segment_signal: np.ndarray, fs: int = 250) -> np.ndarray:
-    """Extract features from all channels in a segment using the refactored feature set."""
+    """Extract features from all channels in a segment using the enhanced feature set."""
     all_channel_features: List[float] = []
     bands = {"delta": (0.5, 4), "theta": (4, 8), "alpha": (8, 13), "beta": (13, 30), "gamma": (30, 50)}
     
@@ -271,10 +585,10 @@ def _extract_segment_features(segment_signal: np.ndarray, fs: int = 250) -> np.n
     if actual_num_channels == 0: # Should not happen if segment is valid
         return np.array([0.0] * (DEFAULT_EXPECTED_CHANNELS * NUM_FEATURES_PER_CHANNEL_REF))
 
-
     for ch_idx in range(actual_num_channels):
         ch_signal_data = segment_signal[:, ch_idx]
-        ch_feats = _extract_channel_features(ch_signal_data, fs, bands)
+        # Pass the full multi-channel data for cross-correlation calculation
+        ch_feats = _extract_channel_features(ch_signal_data, fs, bands, all_channels_data=segment_signal)
         all_channel_features.extend(ch_feats)
 
     features_array = np.asarray(all_channel_features, dtype=float)
@@ -359,7 +673,6 @@ def process_session_for_features(
         if verbose:
             print(f"    ℹ️ Channel mismatch for {group_name}: Expected {num_channels_expected}, Got {actual_num_channels_in_file}. Adjusting empty features.")
         current_session_empty_features = np.zeros(actual_num_channels_in_file * num_features_per_channel, dtype=float)
-
 
     _log_status_update("Filtering, Rereferencing & Normalization", force_print=verbose)
     filter_proc_start = time.time()
@@ -536,19 +849,30 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
             print(f"\n✅ Parallel training processing completed in {time.time() - train_parallel_start_time:.1f}s")
         except Exception as e_par_train:
             print(f"\n❌ ERROR in parallel training processing: {e_par_train}. Try reducing max_workers or check individual session processing.")
-            # Optionally add sequential fallback here if critical
+            train_results_from_parallel = []
     
-    # ensure that train_results_from_parallel is not None
-    assert train_results_from_parallel is not None, "Parallel processing returned None. Check for errors in session processing."
+    # Combine all training features and indices
+    all_train_features_list: List[np.ndarray] = []
+    all_train_original_indices: List[Any] = []
     
-    X_train_features_list, all_train_original_indices = [], []
-    for features_list, indices_list in train_results_from_parallel:
-        X_train_features_list.extend(features_list)
-        all_train_original_indices.extend(indices_list)
+    if train_results_from_parallel:
+        for result in train_results_from_parallel:
+            if result and len(result) == 2:
+                features_list, indices_list = result
+                if features_list:
+                    all_train_features_list.extend(features_list)
+                if indices_list:
+                    all_train_original_indices.extend(indices_list)
 
-    X_train_np = np.array(X_train_features_list, dtype=float) if X_train_features_list else np.array([], dtype=float)
-    y_train_np, train_subject_ids_np = np.array([], dtype=float), np.array([], dtype=object)
-
+    # Convert to numpy arrays
+    X_train_np = np.array([])
+    y_train_np = np.array([])
+    train_subject_ids_np = np.array([])
+    
+    if all_train_features_list:
+        X_train_np = np.vstack(all_train_features_list)
+        print(f"   ✅ Training features combined: {X_train_np.shape}")
+    
     if all_train_original_indices:
         # Ensure indices are unique if there's any chance of duplicates from processing
         unique_train_indices = pd.Index(all_train_original_indices).unique()
@@ -562,8 +886,8 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     if verbose:
         print(f"\n📈 Training Set Results:")
         print(f"   X_train shape: {X_train_np.shape if X_train_np.size > 0 else 'Empty'}")
-        print(f"   y_train shape: {y_train_np.shape if y_train_np.size > 0 else 'Empty'}")
-        print(f"   Train Subject IDs: {len(np.unique(train_subject_ids_np)) if train_subject_ids_np.size > 0 else 'None'}")
+        print(f"   y_train shape: {y_train_np.shape if len(y_train_np) > 0 else 'Empty'}")
+        print(f"   Train Subject IDs: {len(np.unique(train_subject_ids_np)) if len(train_subject_ids_np) > 0 else 'None'}")
 
     # --- Test Set Feature Extraction ---
     print("\n⏳ Processing Test Set...")
@@ -591,10 +915,10 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     if test_session_groups_list:
         try:
             test_results_from_parallel = Parallel(
-                n_jobs=max_workers, verbose=(10 if verbose else 0), timeout=3600, prefer="processes", batch_size=1
+                n_jobs=max_workers, verbose=(10 if verbose else 0), timeout=3600, prefer="processes"
             )(
                 delayed(process_session_for_features)(
-                    session_grp, DATA_ROOT / "test", bp_sos_coeffs, notch_sos_coeffs, SAMPLING_RATE,
+                    session_grp, DATA_ROOT / "test", SAMPLING_RATE,
                     num_channels_expected=expected_channels, verbose=verbose
                 )
                 for session_grp in tqdm(test_session_groups_list, desc="Test Sessions")
@@ -602,13 +926,25 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
             print(f"\n✅ Parallel test processing completed in {time.time() - test_parallel_start_time:.1f}s")
         except Exception as e_par_test:
             print(f"\n❌ ERROR in parallel test processing: {e_par_test}. Try reducing max_workers.")
+            test_results_from_parallel = []
 
-    X_test_features_list, all_test_original_indices = [], []
-    for features_list, indices_list in test_results_from_parallel:
-        X_test_features_list.extend(features_list)
-        all_test_original_indices.extend(indices_list)
+    # Combine all test features and indices
+    all_test_features_list: List[np.ndarray] = []
+    all_test_original_indices: List[Any] = []
+    
+    if test_results_from_parallel:
+        for result in test_results_from_parallel:
+            if result and len(result) == 2:
+                features_list, indices_list = result
+                if features_list:
+                    all_test_features_list.extend(features_list)
+                if indices_list:
+                    all_test_original_indices.extend(indices_list)
 
-    X_test_np = np.array(X_test_features_list, dtype=float) if X_test_features_list else np.array([], dtype=float)
+    X_test_np = np.array([])
+    if all_test_features_list:
+        X_test_np = np.vstack(all_test_features_list)
+        print(f"   ✅ Test features combined: {X_test_np.shape}")
 
     # Align X_test to the original order of test_segments_df, handling potential MultiIndex
     if all_test_original_indices and X_test_np.size > 0:
@@ -632,14 +968,6 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
             temp_idx_for_df = pd.Index(all_test_original_indices, name=original_test_index.name)
 
         if temp_idx_for_df is not None and X_test_np.ndim == 2: # Ensure X_test_np is 2D
-            # Ensure all feature vectors in X_test_np have the same length before creating DataFrame
-            # This should be the case if process_session_for_features correctly uses current_session_empty_features
-            # or if all signal files have the same number of channels.
-            # If lengths vary, np.array(X_test_features_list) might be object type or error.
-            # A robust way is to pad/truncate each feature vector in X_test_features_list to a common length
-            # (e.g., expected_channels * features_per_channel) before np.array if lengths can vary.
-            # For now, assume lengths are consistent or X_test_np.ndim == 2 holds.
-            
             temp_feature_df = pd.DataFrame(X_test_np, index=temp_idx_for_df)
             # Reindex to match the original test_segments_df.index, filling missing with 0.0
             # This ensures X_test_np has one row for every row in test_segments_df, in the original order.
@@ -654,7 +982,6 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
         elif temp_idx_for_df is None and verbose:
              print("   Warning: Index for X_test alignment could not be created. X_test not aligned.")
 
-
     if verbose:
         print(f"\n🧪 Test Set Results:")
         print(f"   X_test shape: {X_test_np.shape if X_test_np.size > 0 else 'Empty'}")
@@ -662,22 +989,37 @@ def main(verbose: bool = False, test_mode: bool = False, max_workers: Optional[i
     # --- Final Checks and Save ---
     print("\n--- Final Dataset Shapes: ---")
     print(f"X_train: {X_train_np.shape if X_train_np.size > 0 else 'Empty'}")
-    print(f"y_train: {y_train_np.shape if y_train_np.size > 0 else 'Empty'}")
+    print(f"y_train: {y_train_np.shape if len(y_train_np) > 0 else 'Empty'}")
     print(f"X_test: {X_test_np.shape if X_test_np.size > 0 else 'Empty'}")
-    print(f"Train Subject IDs: {train_subject_ids_np.shape if train_subject_ids_np.size > 0 else 'Empty'}")
+    print(f"Train Subject IDs: {train_subject_ids_np.shape if len(train_subject_ids_np) > 0 else 'Empty'}")
 
     print("\n💾 Saving extracted feature arrays...")
     output_features_path = DATA_ROOT / "extracted_features"
     output_labels_path = DATA_ROOT / "labels"
 
-    if X_test_np.size > 0: np.save(output_features_path / "X_test.npy", X_test_np)
-    else: print("   X_test is empty, not saving.")
-    if X_train_np.size > 0: np.save(output_features_path / "X_train.npy", X_train_np)
-    else: print("   X_train is empty, not saving.")
-    if y_train_np.size > 0: np.save(output_labels_path / "y_train.npy", y_train_np)
-    else: print("   y_train is empty, not saving.")
-    if train_subject_ids_np.size > 0: np.save(output_features_path / "sample_subject_array_train.npy", train_subject_ids_np)
-    else: print("   sample_subject_list_train is empty, not saving.")
+    if X_test_np.size > 0: 
+        np.save(output_features_path / "X_test.npy", X_test_np)
+        print(f"   ✅ Saved X_test.npy: {X_test_np.shape}")
+    else: 
+        print("   X_test is empty, not saving.")
+        
+    if X_train_np.size > 0: 
+        np.save(output_features_path / "X_train.npy", X_train_np)
+        print(f"   ✅ Saved X_train.npy: {X_train_np.shape}")
+    else: 
+        print("   X_train is empty, not saving.")
+        
+    if len(y_train_np) > 0: 
+        np.save(output_labels_path / "y_train.npy", np.asarray(y_train_np))
+        print(f"   ✅ Saved y_train.npy: {y_train_np.shape}")
+    else: 
+        print("   y_train is empty, not saving.")
+        
+    if len(train_subject_ids_np) > 0: 
+        np.save(output_features_path / "sample_subject_array_train.npy", train_subject_ids_np)
+        print(f"   ✅ Saved train subject IDs: {train_subject_ids_np.shape}")
+    else: 
+        print("   train subject IDs is empty, not saving.")
 
     print(f"\n✅ Feature extraction and saving complete to {DATA_ROOT.resolve()}.")
     print(f"⏰ Total pipeline execution time: {time.time() - overall_pipeline_start_time:.2f} seconds.")
