@@ -12,7 +12,7 @@ import torch.optim as optim
 from tqdm import tqdm
 from torchmetrics.functional import accuracy, f1_score, auroc 
 from torch_geometric.utils import to_dense_batch
-from data.geodataloader import GeoDataLoader
+from src.data.geodataloader import GeoDataLoader
 from src.data.dataset_graph import GraphEEGDataset 
 
 # Import wandb with optional fallback
