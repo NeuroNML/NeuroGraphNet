@@ -22,6 +22,23 @@ if str(project_root) not in sys.path:
 from src.utils.signal import normalize, rereference, spectral_entropy, time_filtering
 from src.utils.index import ensure_eeg_multiindex
 
+# NumPy compatibility function for trapezoid integration
+def _trapezoid_integrate(y, x=None):
+    """
+    Compatibility function for trapezoidal integration.
+    Uses np.trapezoid if available (NumPy 2.0+), otherwise falls back to np.trapz.
+    """
+    if hasattr(np, 'trapezoid'):
+        result = np.trapezoid(y, x)
+    else:
+        result = np.trapz(y, x)
+    
+    # Ensure we return a scalar float value
+    if hasattr(result, 'item'):
+        return float(result.item())
+    else:
+        return float(result)
+
 # --- Configuration & Global Constants ---
 # Define the number of features globally for consistency
 # Time (12): mean, std, var, rms, p2p, skew, kurt, line_length, zcr, hj_mob, hj_cmp, samp_ent
@@ -127,7 +144,7 @@ def _spectral_edge_frequency(freqs: np.ndarray, psd: np.ndarray, percentage_powe
     
     # Ensure psd values are non-negative
     psd_sanitized = np.maximum(psd, 0)
-    total_power = np.trapezoid(psd_sanitized, freqs) # Integrate using trapezoidal rule
+    total_power = _trapezoid_integrate(psd_sanitized, freqs) # Integrate using trapezoidal rule
 
     if float(total_power) < 1e-12: # Check for zero or near-zero power
         return 0.0 # Or freqs[0] if that's more appropriate
@@ -137,7 +154,7 @@ def _spectral_edge_frequency(freqs: np.ndarray, psd: np.ndarray, percentage_powe
     if len(freqs) > 1:
         cumulative_power_values = np.zeros(len(freqs))
         for i in range(1, len(freqs)):
-            cumulative_power_values[i] = np.trapezoid(psd_sanitized[:i+1], freqs[:i+1])
+            cumulative_power_values[i] = _trapezoid_integrate(psd_sanitized[:i+1], freqs[:i+1])
         cumulative_power = np.array(cumulative_power_values)
     else: # Single frequency point
         cumulative_power = psd_sanitized * (freqs[0] if freqs.size > 0 else 1)
@@ -496,13 +513,13 @@ def _extract_channel_features(
             
             if freqs.size > 0 and psd.size > 0:
                 psd = np.maximum(psd, 0) # Ensure non-negative PSD
-                total_power_val = np.trapezoid(psd, freqs)
+                total_power_val = _trapezoid_integrate(psd, freqs)
                 if total_power_val < 1e-12: total_power_val = 1e-12 # Avoid division by zero later
 
                 for name, (lo, hi) in bands.items():
                     idx_band = (freqs >= lo) & (freqs < hi)
                     if np.any(idx_band):
-                        abs_band_powers[name] = np.trapezoid(psd[idx_band], freqs[idx_band])
+                        abs_band_powers[name] = _trapezoid_integrate(psd[idx_band], freqs[idx_band])
                         rel_band_powers[name] = abs_band_powers[name] / total_power_val
                 
                 psd_normalized = psd / total_power_val # Normalize for entropy

@@ -1,5 +1,4 @@
 # --------------------------------------- General imports ---------------------------------------#
-from cProfile import label
 import os.path as osp
 import os
 from pathlib import Path
@@ -26,6 +25,7 @@ logger = logging.getLogger(__name__)
 # --------------------------- Custom imports ---------------------------#
 from src.utils.preprocessing_funcs import time_filtering
 from src.utils.general_funcs import log
+from src.utils.graph_features import GraphFeatureExtractor, augment_data_with_graph_features
 
 
 class GraphEEGDataset(Dataset):
@@ -50,6 +50,8 @@ class GraphEEGDataset(Dataset):
         apply_normalization: bool = True,
         sampling_rate: int = 250,
         is_test: bool = False,  # New parameter to indicate test mode
+        extract_graph_features: bool = False,  # New parameter to control graph feature extraction
+        graph_feature_types: Optional[List[str]] = None,  # Types of graph features to extract
     ):
         """
         Custom PyTorch Geometric dataset for EEG data.
@@ -66,6 +68,7 @@ class GraphEEGDataset(Dataset):
             pre_filter: Pre-filter to be applied to each data object
             sampling_rate: Sampling rate of the EEG data - fixed to 250 Hz
             is_test (bool): If True, indicates this is a test dataset without labels
+            extract_graph_features (bool): If True, extracts additional graph features for each segment
         """
         logger.info("Initializing GraphEEGDataset...")
         logger.info(f"Dataset parameters:")
@@ -81,6 +84,7 @@ class GraphEEGDataset(Dataset):
         logger.info(f"  - Apply normalization: {apply_normalization}")
         logger.info(f"  - Sampling rate: {sampling_rate}")
         logger.info(f"  - Test mode: {is_test}")
+        logger.info(f"  - Extract graph features: {extract_graph_features}")
 
         self.root = root
         self.clips = clips
@@ -101,6 +105,19 @@ class GraphEEGDataset(Dataset):
         self.apply_normalization = apply_normalization
         self.sampling_rate = sampling_rate
         self.is_test = is_test
+        self.extract_graph_features = extract_graph_features
+        
+        # Initialize graph feature extractor if requested
+        if self.extract_graph_features:
+            logger.info("Initializing graph feature extractor...")
+            self.graph_feature_extractor = GraphFeatureExtractor(
+                include_node_features=True,
+                include_graph_features=True,
+                feature_types=graph_feature_types
+            )
+            logger.info(f"Graph feature types: {self.graph_feature_extractor.feature_types}")
+        else:
+            self.graph_feature_extractor = None
 
         # EEG channels - standard 10-20 system
         self.channels = [
@@ -255,6 +272,19 @@ class GraphEEGDataset(Dataset):
                 y = torch.tensor([labels[i]], dtype=torch.float32) # type: ignore
                 data = Data(x=x, edge_index=edge_index, y=y, id=original_id)
 
+            # Add graph features if enabled
+            if self.extract_graph_features and self.graph_feature_extractor is not None:
+                try:
+                    data = augment_data_with_graph_features(
+                        data, 
+                        self.graph_feature_extractor,
+                        concat_to_node_features=True
+                    )
+                    if processed_count % 100 == 0:
+                        logger.info(f"Added graph features to embedding {processed_count}")
+                except Exception as e:
+                    logger.warning(f"Failed to extract graph features for embedding {i}: {e}")
+
             torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
             processed_count += 1
 
@@ -304,6 +334,19 @@ class GraphEEGDataset(Dataset):
                 y = torch.tensor([self.clips["label"].values[index]], dtype=torch.float)
                 data = Data(x=x, edge_index=edge_index, y=y, id=original_id)
 
+            # Add graph features if enabled
+            if self.extract_graph_features and self.graph_feature_extractor is not None:
+                try:
+                    data = augment_data_with_graph_features(
+                        data, 
+                        self.graph_feature_extractor,
+                        concat_to_node_features=True
+                    )
+                    if processed_count % 100 == 0:
+                        logger.info(f"Added graph features to feature {processed_count}")
+                except Exception as e:
+                    logger.warning(f"Failed to extract graph features for feature {index}: {e}")
+
             torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
             processed_count += 1
 
@@ -341,6 +384,10 @@ class GraphEEGDataset(Dataset):
                 end = int(row["end_time"] * self.sampling_rate)
                 segment_signal = session_signal[start:end].T
 
+                # Ensure segment_signal is numpy array
+                if not isinstance(segment_signal, np.ndarray):
+                    segment_signal = segment_signal.values  # Convert from pandas to numpy if needed
+
                 x = torch.tensor(segment_signal, dtype=torch.float)
                 edge_index = self._create_edges(segment_signal)
 
@@ -359,6 +406,19 @@ class GraphEEGDataset(Dataset):
                 else:
                     y = torch.tensor([row["label"]], dtype=torch.float)
                     data = Data(x=x, edge_index=edge_index, y=y, id=original_id)
+
+                # Add graph features if enabled
+                if self.extract_graph_features and self.graph_feature_extractor is not None:
+                    try:
+                        data = augment_data_with_graph_features(
+                            data, 
+                            self.graph_feature_extractor,
+                            concat_to_node_features=True
+                        )
+                        if processed_count % 100 == 0:
+                            logger.info(f"Added graph features to session segment {processed_count}")
+                    except Exception as e:
+                        logger.warning(f"Failed to extract graph features for segment {index}: {e}")
 
                 torch.save(data, osp.join(self.processed_dir, f"data_{processed_count}.pt"))
                 processed_count += 1
@@ -393,16 +453,22 @@ class GraphEEGDataset(Dataset):
             signal = self._normalize(signal)
         return signal
 
-    def _create_edges(self, signal_data: torch.Tensor) -> torch.Tensor:
+    def _create_edges(self, signal_data: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
         """
         Creates edges between EEG channels based on the specified strategy.
 
         Args:
-            signal_data: Torch tensor containing EEG signals (channels x time)
+            signal_data: Tensor or array containing EEG signals (channels x time)
 
         Returns:
             torch.Tensor: Edge index tensor of shape [2, num_edges]
         """
+        
+        # Convert to numpy array if it's a torch tensor
+        if isinstance(signal_data, torch.Tensor):
+            signal_data_np = signal_data.detach().cpu().numpy()
+        else:
+            signal_data_np = signal_data
         
         if self.top_k == 19: # Fully connected
             logger.debug("Creating fully connected graph")
@@ -417,7 +483,7 @@ class GraphEEGDataset(Dataset):
             return self._create_spatial_edges()
         elif self.edge_strategy == "correlation":
             logger.debug("Creating edges based on correlation")
-            return self._create_correlation_edges(signal_data)
+            return self._create_correlation_edges(signal_data_np)
         else:
             raise ValueError(f"Unknown edge strategy: {self.edge_strategy}")
 
@@ -470,7 +536,7 @@ class GraphEEGDataset(Dataset):
         logger.debug(f"Created {edge_index.shape[1]} spatial edges")
         return edge_index
 
-    def _create_correlation_edges(self, signal_data: torch.Tensor) -> torch.Tensor:
+    def _create_correlation_edges(self, signal_data: np.ndarray) -> torch.Tensor:
         """
         Creates edges based on correlation between channel signals.
 
@@ -478,13 +544,20 @@ class GraphEEGDataset(Dataset):
         - Otherwise: connects all pairs with correlation >= self.correlation_threshold (symmetric).
 
         Args:
-            signal_data (torch.Tensor): EEG signal data (channels x time)
+            signal_data (np.ndarray): EEG signal data (channels x time)
 
         Returns:
             torch.Tensor: Edge index tensor (2, num_edges)
         """
         logger.debug("Computing correlation matrix")
-        corr_matrix = torch.abs(torch.corrcoef(signal_data))
+        
+        # Convert to torch tensor for correlation computation
+        if isinstance(signal_data, np.ndarray):
+            signal_tensor = torch.tensor(signal_data, dtype=torch.float32)
+        else:
+            signal_tensor = signal_data
+            
+        corr_matrix = torch.abs(torch.corrcoef(signal_tensor))
 
         # Eliminate samples with NaN in corr matrix (0 signal)
         if np.isnan(corr_matrix).any():
