@@ -1,8 +1,13 @@
+from typing import Optional
 import torch
 import torch.nn as nn
+from torch_geometric.nn import global_mean_pool
+import logging
 
 from src.layers.gnn.gcn import EEGGCN
 from src.layers.encoders.cnnbilstm_encoder import EEGCNNBiLSTMEncoder
+
+logger = logging.getLogger(__name__)
 
 
 class EEGCNNBiLSTMGCN(nn.Module):
@@ -18,21 +23,29 @@ class EEGCNNBiLSTMGCN(nn.Module):
 
     def __init__(
         self,
-        # Parameters for the CNN_BiLSTM_Encoder (temporal encoder)
-        cnn_dropout_prob: float = 0.25,
+        # Node feature dimensions
+        node_input_dim: int = 3000,  # Time steps per channel
+        # Temporal encoder parameters (CNN-BiLSTM)
+        cnn_dropout: float = 0.25,
         lstm_hidden_dim: int = 64,
-        lstm_out_dim: int = 64,  # This will be the time_encoder_output_dim for the GCN
+        lstm_out_dim: int = 64,  # This becomes node feature dim for GCN
+        lstm_dropout: float = 0.25,
+        lstm_num_layers: int = 1,
         encoder_use_batch_norm: bool = True,
         encoder_use_layer_norm: bool = False,
-        lstm_num_layers: int = 1,
-        lstm_dropout_prob: float = 0.25,
-        # Parameters for the EEGGCN (graph neural network)
-        gcn_hidden_channels: int = 64,
-        gcn_out_channels: int = 32,
-        gcn_pooling_type: str = "mean",
+        # GCN parameters
+        hidden_dim: int = 64,  # GCN hidden dimensions
+        out_channels: int = 32,  # GCN output dimensions
+        num_conv_layers: int = 3,
+        pooling_type: str = "mean",
+        gcn_dropout: float = 0.5,
         gcn_use_batch_norm: bool = True,
-        gcn_num_layers: int = 3,
-        gcn_dropout_prob: float = 0.5,
+        # Graph features
+        graph_feature_dim: int = 0,
+        use_graph_features: bool = True,
+        # Classification
+        num_classes: int = 1,
+        classifier_dropout: float = 0.5,
         # General parameters
         num_channels: int = 19,  # Number of EEG channels
     ):
@@ -40,30 +53,43 @@ class EEGCNNBiLSTMGCN(nn.Module):
         Initializes the EEGCNNBiLSTMGCN.
 
         Args:
+            node_input_dim (int): Input dimension for each node (time steps per channel).
             cnn_dropout (float): Dropout probability for the CNN part of the temporal encoder.
             lstm_hidden_dim (int): Number of hidden units in the LSTM part of the temporal encoder.
             lstm_out_dim (int): Output feature dimension from the LSTM part of the temporal encoder.
                                 This also serves as the input dimension for the GCN.
             lstm_dropout (float): Dropout probability for the LSTM part of the temporal encoder.
-            num_layers (int): Number of layers in the CNN_BiLSTM_Encoder.
-            gcn_hidden_channels (int): Number of hidden units in the GCN layers.
-            gcn_out_channels (int): Output feature dimensions from the last GCN layer before final classification.
-            num_gcn_layers (int): Number of GCN convolutional layers.
+            lstm_num_layers (int): Number of layers in the CNN_BiLSTM_Encoder.
+            hidden_dim (int): Number of hidden units in the GCN layers.
+            out_channels (int): Output feature dimensions from the last GCN layer before pooling.
+            num_conv_layers (int): Number of GCN convolutional layers.
             gcn_dropout (float): Dropout probability for GCN layers.
+            graph_feature_dim (int): Dimension of graph-level features.
+            use_graph_features (bool): Whether to use graph-level features.
+            num_classes (int): Number of output classes.
+            classifier_dropout (float): Dropout for classifier layers.
             num_channels (int): The fixed number of EEG channels (e.g., 19).
         """
         super().__init__()
 
         self.num_channels = num_channels
-        # The output dimension of the channel encoder is now directly lstm_out_dim
-        self.time_encoder_output_dim = lstm_out_dim
+        self.use_graph_features = use_graph_features and graph_feature_dim > 0
+
+        # Compute the classifier input dimension
+        # After GCN pooling, we get hidden_dim features
+        classifier_input_dim = hidden_dim
+        if self.use_graph_features:
+            classifier_input_dim += graph_feature_dim
+
+        # Store output dimension for reference
+        self.node_feature_dim = lstm_out_dim
 
         # Initialize the temporal encoder for each EEG channel.
         self.channel_encoder = EEGCNNBiLSTMEncoder(
-            cnn_dropout=cnn_dropout_prob,
+            cnn_dropout=cnn_dropout,
             lstm_hidden_dim=lstm_hidden_dim,
             lstm_out_dim=lstm_out_dim,
-            lstm_dropout=lstm_dropout_prob,
+            lstm_dropout=lstm_dropout,
             num_layers=lstm_num_layers,
             use_batch_norm=encoder_use_batch_norm,
             use_layer_norm=encoder_use_layer_norm,
@@ -74,32 +100,52 @@ class EEGCNNBiLSTMGCN(nn.Module):
         # Its input dimension (in_channels) will be the output dimension
         # produced by the channel_encoder (lstm_out_dim).
         self.gcn = EEGGCN(
-            in_channels=self.time_encoder_output_dim,
-            hidden_channels=gcn_hidden_channels,
-            num_conv_layers=gcn_num_layers,
-            pooling_type=gcn_pooling_type,
-            out_channels=gcn_out_channels,
-            dropout_prob=gcn_dropout_prob,
+            in_channels=lstm_out_dim,
+            hidden_channels=hidden_dim,
+            num_conv_layers=num_conv_layers,
+            pooling_type=pooling_type,
+            out_channels=out_channels,
+            dropout_prob=gcn_dropout,
             use_batch_norm=gcn_use_batch_norm,
             use_cnn_preprocessing=False,
         )
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, batch_labels: torch.Tensor) -> torch.Tensor:
+        # Classifier layer
+        self.classifier = nn.Sequential(
+            nn.Linear(classifier_input_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(classifier_dropout),
+            nn.Linear(hidden_dim // 2, num_classes)
+        )
+        
+        # Log model configuration
+        logger.info(f"EEGCNNBiLSTMGCN initialized:")
+        logger.info(f"  - Node input dim: {node_input_dim}")
+        logger.info(f"  - Node feature dim (LSTM output): {lstm_out_dim}")
+        logger.info(f"  - GCN hidden dim: {hidden_dim}")
+        logger.info(f"  - Graph feature dim: {graph_feature_dim}")
+        logger.info(f"  - Use graph features: {self.use_graph_features}")
+        logger.info(f"  - Classifier input dim: {classifier_input_dim}")
+        logger.info(f"  - Num classes: {num_classes}")
+        logger.info(f"  - Num channels: {num_channels}")
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, batch: torch.Tensor, graph_features: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Forward pass of the LSTM-GNN model.
+        Forward pass of the CNN-BiLSTM-GCN model.
 
         Args:
             x (torch.Tensor): Input EEG signals. Expected shape:
-                              [num_graphs_in_batch, num_channels, time_steps]
-                              For example, [batch_size, 19, 3000].
+                              [num_graphs_in_batch * num_channels, time_steps]
+                              For example, [batch_size * 19, 3000].
             edge_index (torch.Tensor): Graph connectivity in COO format. Shape: [2, num_edges_in_batch].
                                        Node indices are assumed to be global across the batch
                                        as handled by PyTorch Geometric's DataLoader.
             batch (torch.Tensor): Batch vector mapping each node to its respective graph.
                                   Shape: [total_num_nodes_in_batch]. Used for global pooling.
+            graph_features (torch.Tensor, optional): Graph-level features. Shape: [num_graphs_in_batch, graph_feature_dim].
 
         Returns:
-            torch.Tensor: Class logits for each graph in the batch. Shape: [num_graphs_in_batch, 1].
+            torch.Tensor: Class logits for each graph in the batch. Shape: [num_graphs_in_batch, num_classes].
         """
         # The input 'x' represents a batch of EEG recordings,
         # where each recording has multiple channels (nodes) and time steps.
@@ -112,9 +158,20 @@ class EEGCNNBiLSTMGCN(nn.Module):
 
         # Pass the extracted node features (embeddings) and the graph structure
         # (edge_index and batch tensors) to the GCN.
-        # The `batch` tensor correctly maps the flattened `node_features` back
-        # to their respective graphs for aggregation within the GCN.
-        logits = self.gcn(node_features, edge_index, batch_labels)
+        # The GCN will perform graph convolutions and then global pooling
+        # to get graph-level representations.
+        gcn_output = self.gcn(node_features, edge_index, batch)
+        
+        # gcn_output should have shape: [num_graphs_in_batch, hidden_dim]
+        
+        # Combine with graph-level features if available
+        if self.use_graph_features and graph_features is not None:
+            # Concatenate node-level aggregated features with graph-level features
+            combined_features = torch.cat([gcn_output, graph_features], dim=1)
+        else:
+            combined_features = gcn_output
+        
+        # Final classification
+        logits = self.classifier(combined_features)
 
-        # return predictions logits
         return logits
