@@ -129,7 +129,6 @@ def train_model(
     grad_clip: float = 1.0,
     overwrite: bool = False,
     use_gnn: bool = True,
-    use_oversampling: bool = False, # New parameter for toggling oversampling
     wandb_config: Optional[Dict[str, Any]] = None,  # Wandb configuration
     wandb_project: Optional[str] = None,  # Wandb project name
     wandb_run_name: Optional[str] = None,  # Wandb run name
@@ -166,7 +165,6 @@ def train_model(
             'patience': patience,
             'monitor': monitor,
             'grad_clip': grad_clip,
-            'use_oversampling': use_oversampling,
             'batch_size': train_loader.batch_size,
             'optimizer': type(optimizer).__name__,
             'lr': optimizer.param_groups[0]['lr'],
