@@ -918,7 +918,8 @@ def train_k_fold(
     """
     Perform k-fold cross-validation training.
     
-    Args:
+    Args
+
         dataset: The dataset to split into k folds
         model_class: Class of the model to instantiate for each fold
         model_kwargs: Keyword arguments for model instantiation
@@ -954,13 +955,7 @@ def train_k_fold(
     save_dir.mkdir(parents=True, exist_ok=True)
     
     # Extract labels for splitting
-    labels = []
-    for i in range(len(dataset)):
-        data = dataset[i]
-        if hasattr(data, 'y'):
-            labels.append(data.y.item() if data.y.dim() > 0 else data.y)
-        else:
-            raise ValueError("Dataset items must have 'y' attribute containing labels")
+    labels = dataset["label"]
     
     # Initialize k-fold splitter
     if stratified:
