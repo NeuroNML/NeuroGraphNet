@@ -111,12 +111,7 @@ class EEGCNNBiLSTMGCN(nn.Module):
         )
 
         # Classifier layers to map GCN output to class logits.
-        self.classifier = nn.Sequential(
-            nn.Linear(classifier_input_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(classifier_dropout),
-            nn.Linear(hidden_dim // 2, num_classes)
-        )
+        self.classifier = nn.Linear(hidden_dim // 2, num_classes)
         
         # Log model configuration
         logger.info(f"EEGCNNBiLSTMGCN initialized:")
