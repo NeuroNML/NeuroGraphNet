@@ -118,9 +118,13 @@ class TrainingContext:
 
         # clean up CUDA memory if available
         if torch.cuda.is_available():
+            # read current GPU memory usage
+            usage = torch.cuda.memory_allocated()
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
-        
+            current_usage = torch.cuda.memory_allocated()
+            print(f"🧹 Cleared CUDA memory. Previous usage: {usage / (1024 ** 2):.2f} MB. Current usage: {current_usage / (1024 ** 2):.2f} MB")
+
         # Ensure the dataset type exists in the manager's configuration FIRST
         if dataset_type not in self.data_manager.datasets_config:
             raise ValueError(f"Dataset type '{dataset_type}' is not recognized. Available types: {list(self.data_manager.datasets_config.keys())}")
@@ -150,6 +154,7 @@ class TrainingContext:
         self.info = self.data_manager.get_dataset_info(dataset_type)
         
         print(f"🚀 Context ready for '{dataset_type}'.")
+        print(f"   Memory usage: {torch.cuda.memory_allocated() / (1024 ** 2):.2f} MB" if torch.cuda.is_available() else "   Memory usage: N/A")
         print(f"   Train batches: {len(self.train_loader)}, Val batches: {len(self.val_loader)}")
         for key, value in self.info.items():
             if value is not None:
