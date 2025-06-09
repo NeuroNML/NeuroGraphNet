@@ -125,6 +125,11 @@ class TrainingContext:
         Switches the active dataset, updating all public loader and info attributes.
         """
         print(f"\n🌐 Switching context to '{dataset_type.upper()}' dataset...")
+
+        # clean up CUDA memory if available
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
         
         # Get the dictionary of loaders from the manager (creates them if they don't exist)
         loaders = self.data_manager.get_loaders(dataset_type)
