@@ -160,7 +160,16 @@ class EEGCNNBiLSTMGCN(nn.Module):
                     f"GCN output has {gcn_output.shape[-1]} features, classifier expects "
                     f"{self.classifier[0].in_features} features."
                 )
+            # Ensure that the graph features are of the expected shape
+            if graph_features.shape[0] != gcn_output.shape[0]:
+                raise ValueError(
+                    f"Graph features shape {graph_features.shape} does not match GCN output shape {gcn_output.shape}. "
+                    "Ensure that graph_features has the same number of rows as the number of graphs in the batch."
+                )
+
             # Concatenate node-level aggregated features with graph-level features
+            print("Graph features shape:", graph_features.shape)
+            print(graph_features)
             combined_features = torch.cat([gcn_output, graph_features], dim=1)
         else:
             combined_features = gcn_output
