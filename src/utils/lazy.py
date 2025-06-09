@@ -1,3 +1,11 @@
+from typing import Optional
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+from src.data.geodataloader import GeoDataLoader
+import numpy as np
+import torch
+
+from utils.general_funcs import labels_stats
+
 class LazyDataLoaderManager:
     """
     Manages the lazy loading of multiple dataset types (e.g., timeseries, graph).
@@ -103,12 +111,12 @@ class TrainingContext:
     This class holds the currently active loaders and dataset information,
     matching the user's desired workflow.
     """
-    def __init__(self, data_manager):
+    def __init__(self, data_manager: LazyDataLoaderManager):
         self.data_manager = data_manager
         self.dataset_type = None
-        self.train_loader = None
-        self.val_loader = None
-        self.test_loader = None
+        self.train_loader: Optional[DataLoader] = None
+        self.val_loader: Optional[DataLoader] = None
+        self.test_loader: Optional[DataLoader] = None
         self.info = {}
         print("✅ TrainingContext initialized. Use .switch_to('dataset_type') to begin.")
 
@@ -125,6 +133,16 @@ class TrainingContext:
         self.train_loader = loaders['train']
         self.val_loader = loaders['val']
         self.test_loader = loaders['test']
+
+        # ensure that all loaders are of the same type
+        if not all(isinstance(loader, type(self.train_loader)) for loader in [self.val_loader, self.test_loader]):
+            raise ValueError("All loaders must be of the same type (e.g., DataLoader or GeoDataLoader).")
+        # Ensure the dataset type exists in the manager
+        if dataset_type not in self.data_manager.datasets_config:
+            raise ValueError(f"Dataset type '{dataset_type}' is not recognized. Available types: {list(self.data_manager.datasets_config.keys())}")
+        # Ensure the dataset type is valid
+        if dataset_type not in ['spatial', 'correlation', 'absdiff_correlation', 'features', 'signal']:
+            raise ValueError(f"Invalid dataset type '{dataset_type}'. Supported types: spatial, correlation, absdiff_correlation, features, signal.")
         
         # Update the dataset type and informational attributes
         self.dataset_type = dataset_type
