@@ -117,7 +117,7 @@ class TrainingContext:
         self.train_loader: Optional[DataLoader] = None
         self.val_loader: Optional[DataLoader] = None
         self.test_loader: Optional[DataLoader] = None
-        self.clips = None
+        self.clips: Optional[object] = None
         self.info = {}
         print("✅ TrainingContext initialized. Use .switch_to('dataset_type') to begin.")
 
@@ -132,7 +132,18 @@ class TrainingContext:
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
         
+        # Ensure the dataset type exists in the manager's configuration FIRST
+        if dataset_type not in self.data_manager.datasets_config:
+            raise ValueError(f"Dataset type '{dataset_type}' is not recognized. Available types: {list(self.data_manager.datasets_config.keys())}")
+        
+        # Ensure the dataset type is one of the specifically supported types for this context
+        # Corrected 'features' to 'feature' in the error message to match the list in the check
+        supported_context_types = ['spatial', 'correlation', 'absdiff_correlation', 'feature', 'signal']
+        if dataset_type not in supported_context_types:
+            raise ValueError(f"Invalid dataset type '{dataset_type}'. Supported types: {', '.join(supported_context_types)}.")
+        
         # Get the dictionary of loaders from the manager (creates them if they don't exist)
+        # This is now safe because dataset_type has been validated against datasets_config
         loaders = self.data_manager.get_loaders(dataset_type)
         
         # Overwrite the context's loader attributes
@@ -144,12 +155,6 @@ class TrainingContext:
         # ensure that all loaders are of the same type
         if not all(isinstance(loader, type(self.train_loader)) for loader in [self.val_loader, self.test_loader]):
             raise ValueError("All loaders must be of the same type (e.g., DataLoader or GeoDataLoader).")
-        # Ensure the dataset type exists in the manager
-        if dataset_type not in self.data_manager.datasets_config:
-            raise ValueError(f"Dataset type '{dataset_type}' is not recognized. Available types: {list(self.data_manager.datasets_config.keys())}")
-        # Ensure the dataset type is valid
-        if dataset_type not in ['spatial', 'correlation', 'absdiff_correlation', 'feature', 'signal']:
-            raise ValueError(f"Invalid dataset type '{dataset_type}'. Supported types: spatial, correlation, absdiff_correlation, features, signal.")
         
         # Update the dataset type and informational attributes
         self.dataset_type = dataset_type
