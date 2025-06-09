@@ -572,6 +572,10 @@ def train_model(
         model.eval()
         epoch_val_loss = 0.0
         all_val_preds, all_val_targets = [], []
+        # Add tracking of per-patient predictions and targets
+        patient_preds = defaultdict(list)
+        patient_targets = defaultdict(list)
+        
         with torch.no_grad():
             for data_batch_item_val in val_loader: # Use a different variable name
                 if use_gnn:
@@ -587,6 +591,11 @@ def train_model(
                     else:
                         graph_features = None
                     
+                    # Extract patient information
+                    patient_ids = None
+                    if hasattr(curr_batch, 'patient'):
+                        patient_ids = curr_batch.patient.cpu().tolist() if isinstance(curr_batch.patient, torch.Tensor) else curr_batch.patient
+                    
                     # Use safe model call that handles graph_features parameter automatically
                     logits = _safe_model_call(model,
                                             curr_batch.x.float(),
@@ -594,6 +603,11 @@ def train_model(
                                             curr_batch.batch,
                                             graph_features)
                 else: # Non-GNN
+                    # Extract patient information (if available)
+                    patient_ids = None
+                    if hasattr(data_batch_item_val, 'patient'):
+                        patient_ids = data_batch_item_val.patient.cpu().tolist() if isinstance(data_batch_item_val.patient, torch.Tensor) else data_batch_item_val.patient
+                    
                     if isinstance(data_batch_item_val, (tuple, list)) and len(data_batch_item_val) == 2:
                         x_batch_val, y_batch_val = data_batch_item_val
                         x_batch_val = x_batch_val.to(device)
@@ -647,6 +661,25 @@ def train_model(
                 # store round results
                 all_val_preds.append(probs.cpu()) # Store probabilities instead of binary predictions
                 all_val_targets.append(y_targets.squeeze(1).int().cpu())
+                
+                # Store predictions and targets by patient ID
+                if patient_ids is not None:
+                    probs_cpu = probs.cpu()
+                    targets_cpu = y_targets.squeeze(1).int().cpu()
+                    
+                    # Ensure we have the same number of patient IDs as predictions
+                    if len(patient_ids) != len(probs_cpu):
+                        logger.warning(f"Mismatch between patient IDs ({len(patient_ids)}) and predictions ({len(probs_cpu)})")
+                        # Use the smaller length
+                        min_len = min(len(patient_ids), len(probs_cpu))
+                        patient_ids = patient_ids[:min_len]
+                        probs_cpu = probs_cpu[:min_len]
+                        targets_cpu = targets_cpu[:min_len]
+                    
+                    # Store predictions and targets by patient ID
+                    for i, patient_id in enumerate(patient_ids):
+                        patient_preds[patient_id].append(probs_cpu[i].item())
+                        patient_targets[patient_id].append(targets_cpu[i].item())
         
         avg_val_loss = epoch_val_loss / max(1, len(val_loader))
         val_history['loss'].append(avg_val_loss)
@@ -680,6 +713,59 @@ def train_model(
                 val_history['recall'].append(val_recall)
                 val_history['auroc'].append(val_auroc)
                 val_history['macro_f1'].append(val_macro_f1)
+                
+                # Compute per-patient F1 scores and median if we have patient-level data
+                if patient_preds:
+                    patient_f1_scores = {}
+                    patient_precision_scores = {}
+                    patient_recall_scores = {}
+                    
+                    for patient_id, predictions in patient_preds.items():
+                        if patient_id in patient_targets:
+                            targets = patient_targets[patient_id]
+                            if len(predictions) == len(targets):
+                                # Convert to tensors for torchmetrics
+                                p_preds = torch.tensor(predictions)
+                                p_targets = torch.tensor(targets).int()
+                                
+                                # Binarize predictions with threshold
+                                p_binary_preds = (p_preds > threshold).int()
+                                
+                                # Compute patient-specific metrics
+                                try:
+                                    p_f1 = f1_score(p_binary_preds, p_targets, task="binary").item()
+                                    p_precision = precision(p_binary_preds, p_targets, task="binary").item()
+                                    p_recall = recall(p_binary_preds, p_targets, task="binary").item()
+                                    
+                                    patient_f1_scores[patient_id] = p_f1
+                                    patient_precision_scores[patient_id] = p_precision
+                                    patient_recall_scores[patient_id] = p_recall
+                                except Exception as e:
+                                    logger.warning(f"Could not compute F1 for patient {patient_id}: {e}")
+                    
+                    # Calculate median patient metrics
+                    if patient_f1_scores:
+                        f1_values = list(patient_f1_scores.values())
+                        precision_values = list(patient_precision_scores.values())
+                        recall_values = list(patient_recall_scores.values())
+                        
+                        median_patient_f1 = float(np.median(f1_values))
+                        median_patient_precision = float(np.median(precision_values))
+                        median_patient_recall = float(np.median(recall_values))
+                        
+                        # Store median values in validation history
+                        val_history['median_patient_f1'].append(median_patient_f1)
+                        val_history['median_patient_precision'].append(median_patient_precision)
+                        val_history['median_patient_recall'].append(median_patient_recall)
+                        
+                        # Log median values
+                        logger.info(f"Median patient F1: {median_patient_f1:.4f}, "
+                                   f"Precision: {median_patient_precision:.4f}, "
+                                   f"Recall: {median_patient_recall:.4f}")
+                    else:
+                        val_history['median_patient_f1'].append(0.0)
+                        val_history['median_patient_precision'].append(0.0)
+                        val_history['median_patient_recall'].append(0.0)
 
                 # Log metric values for debugging
                 logger.debug(f"Epoch {epoch} validation metrics - Acc: {val_acc:.4f}, F1: {val_f1:.4f}, "
@@ -737,6 +823,13 @@ def train_model(
                 'bad_epochs': bad_epochs,
                 f'best_{monitor}': best_score,
             }
+            
+            # Add patient-level metrics if available
+            if 'median_patient_f1' in val_history and val_history['median_patient_f1']:
+                wandb_metrics['val/median_patient_f1'] = val_history['median_patient_f1'][-1]
+                wandb_metrics['val/median_patient_precision'] = val_history['median_patient_precision'][-1] if val_history.get('median_patient_precision') else 0.0
+                wandb_metrics['val/median_patient_recall'] = val_history['median_patient_recall'][-1] if val_history.get('median_patient_recall') else 0.0
+            
             try:
                 wandb.log(wandb_metrics) # type: ignore
             except Exception as e:
@@ -776,6 +869,7 @@ def train_model(
         if val_history.get('f1'): postfix_dict["val_f1"] = f"{val_history['f1'][-1]:.4f}"
         if val_history.get('precision'): postfix_dict["val_prec"] = f"{val_history['precision'][-1]:.4f}"
         if val_history.get('recall'): postfix_dict["val_rec"] = f"{val_history['recall'][-1]:.4f}"
+        if val_history.get('median_patient_f1'): postfix_dict["med_pat_f1"] = f"{val_history['median_patient_f1'][-1]:.4f}"
         pbar.set_postfix(postfix_dict)
 
         if patience > 0 and bad_epochs >= patience:
@@ -1251,7 +1345,7 @@ def train_k_fold(
     
     if successful_folds:
         # Extract all metrics from successful folds
-        metrics_to_analyze = ['f1', 'auroc', 'precision', 'recall', 'macro_f1', 'acc']
+        metrics_to_analyze = ['f1', 'auroc', 'precision', 'recall', 'macro_f1', 'acc', 'median_patient_f1', 'median_patient_precision', 'median_patient_recall']
         fold_metrics = {}
         
         for metric in metrics_to_analyze:
@@ -1322,11 +1416,25 @@ def train_k_fold(
         
         if 'recall' in summary_stats:
             stats = summary_stats['recall']
-            logger.info(f"• Recall: {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+            logger.info(f"• Recall (seizure): {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
         
         if 'precision' in summary_stats:
             stats = summary_stats['precision']
-            logger.info(f"• Precision: {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+            logger.info(f"• Precision (seizure): {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+            
+        # Add median patient F1 score if available
+        patient_metrics = [metric for metric in summary_stats.keys() if 'median_patient' in metric]
+        if patient_metrics:
+            logger.info(f"\n📊 PATIENT-LEVEL METRICS:")
+            if 'median_patient_f1' in summary_stats:
+                stats = summary_stats['median_patient_f1']
+                logger.info(f"• Median patient F1: {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+            if 'median_patient_precision' in summary_stats:
+                stats = summary_stats['median_patient_precision']
+                logger.info(f"• Median patient precision: {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+            if 'median_patient_recall' in summary_stats:
+                stats = summary_stats['median_patient_recall']
+                logger.info(f"• Median patient recall: {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
         
         # Legacy summary for the monitored metric
         val_scores = [f['best_val_score'] for f in successful_folds]

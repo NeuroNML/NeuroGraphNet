@@ -438,12 +438,20 @@ class GraphEEGDataset(Dataset):
                 # Get the original id from the row
                 original_id = row['id']
 
+                # Gather some identifying information to add to the Data object
+                session_info = {
+                    "patient": patient,
+                    "session": session,
+                    "start_time": row["start_time"],
+                    "end_time": row["end_time"],
+                }
+
                 # Create Data object with or without labels
                 if self.is_test:
-                    data = Data(x=x, edge_index=edge_index, id=original_id)
+                    data = Data(x=x, edge_index=edge_index, id=original_id, **session_info)
                 else:
                     y = torch.tensor([row["label"]], dtype=torch.float)
-                    data = Data(x=x, edge_index=edge_index, y=y, id=original_id)
+                    data = Data(x=x, edge_index=edge_index, y=y, id=original_id, **session_info)
 
                 # Add graph features if enabled
                 if self.extract_graph_features and self.graph_feature_extractor is not None:
