@@ -10,14 +10,14 @@ class EEGBiLSTMEncoder(nn.Module):
     - Projection layer for output dimension control
     """
     def __init__(self, input_size=128, hidden_dim=64, out_dim=64, 
-                 dropout=0.25, num_layers=1, use_layer_norm=True):
+                 dropout=0.25, num_layers=1, use_layer_norm=True, bidirectional=True):
         super().__init__()
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_dim,
             num_layers=num_layers,
             batch_first=True,
-            bidirectional=True,
+            bidirectional=bidirectional,
             dropout=dropout if num_layers > 1 else 0
         )
 
