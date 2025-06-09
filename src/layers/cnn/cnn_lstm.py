@@ -5,7 +5,7 @@ from src.layers.encoders.cnnbilstm_encoder import EEGCNNBiLSTMEncoder
 from src.layers.mlp.mlp import EEGMLPClassifier
 from src.layers.encoders.cnn_encoder import EEGCNNEncoder
 
-class EEGCNNLSTMClassifier(nn.Module):
+class EEGCNNBiLSTMClassifier(nn.Module):
     """
     Combines a CNN-BiLSTM Encoder for feature extraction with an MLP for classification.
     """
