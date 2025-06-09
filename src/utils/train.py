@@ -10,8 +10,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
-from torchmetrics.functional import accuracy, f1_score, auroc 
+from torchmetrics.functional import accuracy, f1_score, auroc, precision, recall
 from torch_geometric.utils import to_dense_batch
+import numpy as np  # For median/IQR calculations
 from src.data.geodataloader import GeoDataLoader
 from src.data.dataset_graph import GraphEEGDataset 
 
@@ -19,7 +20,7 @@ from src.data.dataset_graph import GraphEEGDataset
 from sklearn.model_selection import KFold, StratifiedKFold
 from torch_geometric.data import Dataset
 
-from utils.timeseries_eeg_dataset import TimeseriesEEGDataset
+from src.utils.timeseries_eeg_dataset import TimeseriesEEGDataset
 
 # Import wandb with optional fallback
 try:
@@ -382,6 +383,7 @@ def train_model(
     logger.info(f"Total training batches per epoch: {total_batches}")
 
     bad_epochs = 0
+    epoch = start_epoch  # Initialize epoch variable
     logger.info(f"Starting training from epoch {start_epoch + 1} to {num_epochs}")
     pbar = tqdm(range(start_epoch + 1, num_epochs + 1), desc="Epochs", ncols=120, initial=start_epoch + 1, total=num_epochs)
 
@@ -465,7 +467,8 @@ def train_model(
                         if node_features_tensor.size(0) == expected_total_nodes:
                             input_features = node_features_tensor.view(curr_batch.num_graphs, n_channels, num_features_per_channel)
                         else:
-                            input_features, _ = to_dense_batch(node_features_tensor, curr_batch.batch, max_num_nodes=n_channels)
+                            batch_attr = getattr(curr_batch, 'batch', None)
+                            input_features, _ = to_dense_batch(node_features_tensor, batch_attr, max_num_nodes=n_channels)
                     elif curr_batch.num_graphs == 0: raise ValueError("Empty batch encountered.")
                     else: raise ValueError(f"Unexpected num_graphs: {curr_batch.num_graphs}.")
                     # Use safe model call that can handle graph_features if the model supports it
@@ -519,25 +522,50 @@ def train_model(
                 threshold = 0.5
                 binary_preds = (preds_cat_train > threshold).int()
                 
-                # Accuracy and F1 on binary predictions
-                train_history['acc'].append(accuracy(binary_preds, targets_cat_train, task="binary").item())
-                train_history['f1'].append(f1_score(binary_preds, targets_cat_train, task="binary").item())
+                # Binary classification metrics on binary predictions
+                train_acc = accuracy(binary_preds, targets_cat_train, task="binary").item()
+                train_f1 = f1_score(binary_preds, targets_cat_train, task="binary").item()
+                train_precision = precision(binary_preds, targets_cat_train, task="binary").item()
+                train_recall = recall(binary_preds, targets_cat_train, task="binary").item()
                 
                 # AUROC on probabilities
-                train_history['auroc'].append(auroc(preds_cat_train, targets_cat_train, task="binary").item()) # type: ignore
+                train_auroc_result = auroc(preds_cat_train, targets_cat_train, task="binary")
+                train_auroc = train_auroc_result.item() if train_auroc_result is not None else 0.0
+                
+                # For macro F1 (same as binary F1 for binary classification, but explicit)
+                train_macro_f1 = f1_score(binary_preds, targets_cat_train, task="binary", average="macro").item()
+                
+                # Store all metrics
+                train_history['acc'].append(train_acc)
+                train_history['f1'].append(train_f1)
+                train_history['precision'].append(train_precision)
+                train_history['recall'].append(train_recall)
+                train_history['auroc'].append(train_auroc)
+                train_history['macro_f1'].append(train_macro_f1)
                 
                 # Log metric values for debugging
-                logger.debug(f"Epoch {epoch} metrics - Acc: {train_history['acc'][-1]:.4f}, F1: {train_history['f1'][-1]:.4f}, AUROC: {train_history['auroc'][-1]:.4f}")
+                logger.debug(f"Epoch {epoch} training metrics - Acc: {train_acc:.4f}, F1: {train_f1:.4f}, "
+                           f"Precision: {train_precision:.4f}, Recall: {train_recall:.4f}, "
+                           f"AUROC: {train_auroc:.4f}, Macro F1: {train_macro_f1:.4f}")
             except ValueError as e:
                 logger.error(f"Error computing metrics (Epoch {epoch}): {str(e)}")
                 logger.error(f"Preds shape: {preds_cat_train.shape}, Targets shape: {targets_cat_train.shape}")
                 logger.error(f"Preds range: [{preds_cat_train.min():.4f}, {preds_cat_train.max():.4f}]")
                 logger.error(f"Targets unique values: {torch.unique(targets_cat_train).tolist()}")
+                # Append zeros for all metrics
                 train_history['acc'].append(0.0)
                 train_history['f1'].append(0.0)
+                train_history['precision'].append(0.0)
+                train_history['recall'].append(0.0)
                 train_history['auroc'].append(0.0)
+                train_history['macro_f1'].append(0.0)
         else: # Handles empty train_loader_to_iterate or if all batches were skipped
-             train_history['acc'].append(0.0); train_history['f1'].append(0.0); train_history['auroc'].append(0.0)
+             train_history['acc'].append(0.0)
+             train_history['f1'].append(0.0)
+             train_history['precision'].append(0.0)
+             train_history['recall'].append(0.0)
+             train_history['auroc'].append(0.0)
+             train_history['macro_f1'].append(0.0)
 
 
         # Validation
@@ -596,7 +624,8 @@ def train_model(
                             if node_features_tensor.size(0) == expected_total_nodes:
                                 input_features_val = node_features_tensor.view(curr_batch.num_graphs, n_channels, num_features_per_channel)
                             else:
-                                input_features_val, _ = to_dense_batch(node_features_tensor, curr_batch, max_num_nodes=n_channels)
+                                batch_attr = getattr(curr_batch, 'batch', None)
+                                input_features_val, _ = to_dense_batch(node_features_tensor, batch_attr, max_num_nodes=n_channels)
                         elif curr_batch.num_graphs == 0: continue # Skip empty val batch
                         else: raise ValueError(f"Unexpected num_graphs in val: {curr_batch.num_graphs}.")
                         # Use safe model call that can handle graph_features if the model supports it
@@ -612,7 +641,7 @@ def train_model(
                 
                 # Validate probability ranges
                 if torch.any(probs < 0) or torch.any(probs > 1):
-                    logger.warning(f"Batch {batch_idx}: Probabilities outside [0,1] range detected. Clamping values.")
+                    logger.warning(f"Val Batch: Probabilities outside [0,1] range detected. Clamping values.")
                     probs = torch.clamp(probs, 0, 1)
 
                 # store round results
@@ -631,35 +660,59 @@ def train_model(
                 threshold = 0.5
                 binary_preds = (preds_cat_val > threshold).int()
                 
-                # Accuracy and F1 on binary predictions
+                # Binary classification metrics on binary predictions
                 val_acc = accuracy(binary_preds, targets_cat_val, task="binary").item()
                 val_f1 = f1_score(binary_preds, targets_cat_val, task="binary").item()
+                val_precision = precision(binary_preds, targets_cat_val, task="binary").item()
+                val_recall = recall(binary_preds, targets_cat_val, task="binary").item()
                 
                 # AUROC on probabilities
-                val_auroc = auroc(preds_cat_val, targets_cat_val, task="binary").item()
+                val_auroc_result = auroc(preds_cat_val, targets_cat_val, task="binary")
+                val_auroc = val_auroc_result.item() if val_auroc_result is not None else 0.0
                 
+                # For macro F1 (same as binary F1 for binary classification, but explicit)
+                val_macro_f1 = f1_score(binary_preds, targets_cat_val, task="binary", average="macro").item()
+                
+                # Store all metrics
                 val_history['acc'].append(val_acc)
                 val_history['f1'].append(val_f1)
+                val_history['precision'].append(val_precision)
+                val_history['recall'].append(val_recall)
                 val_history['auroc'].append(val_auroc)
+                val_history['macro_f1'].append(val_macro_f1)
 
                 # Log metric values for debugging
-                logger.debug(f"Epoch {epoch} validation metrics - Acc: {val_acc:.4f}, F1: {val_f1:.4f}, AUROC: {val_auroc:.4f}")
+                logger.debug(f"Epoch {epoch} validation metrics - Acc: {val_acc:.4f}, F1: {val_f1:.4f}, "
+                           f"Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, "
+                           f"AUROC: {val_auroc:.4f}, Macro F1: {val_macro_f1:.4f}")
 
                 if monitor == "val_auroc": current_score_val = val_auroc
                 elif monitor == "val_f1": current_score_val = val_f1
                 elif monitor == "val_acc": current_score_val = val_acc
+                elif monitor == "val_precision": current_score_val = val_precision
+                elif monitor == "val_recall": current_score_val = val_recall
+                elif monitor == "val_macro_f1": current_score_val = val_macro_f1
                 # else monitor is "val_loss", already set
             except ValueError as e:
                 logger.error(f"Error computing validation metrics (Epoch {epoch}): {str(e)}")
                 logger.error(f"Preds shape: {preds_cat_val.shape}, Targets shape: {targets_cat_val.shape}")
                 logger.error(f"Preds range: [{preds_cat_val.min():.4f}, {preds_cat_val.max():.4f}]")
                 logger.error(f"Targets unique values: {torch.unique(targets_cat_val).tolist()}")
+                # Append zeros for all metrics
                 val_history['acc'].append(0.0)
                 val_history['f1'].append(0.0)
+                val_history['precision'].append(0.0)
+                val_history['recall'].append(0.0)
                 val_history['auroc'].append(0.0)
+                val_history['macro_f1'].append(0.0)
                 # current_score_val remains avg_val_loss
         else: # Handles empty val_loader or if all batches were skipped
-            val_history['acc'].append(0.0); val_history['f1'].append(0.0); val_history['auroc'].append(0.0)
+            val_history['acc'].append(0.0)
+            val_history['f1'].append(0.0)
+            val_history['precision'].append(0.0)
+            val_history['recall'].append(0.0)
+            val_history['auroc'].append(0.0)
+            val_history['macro_f1'].append(0.0)
             # current_score_val remains avg_val_loss
 
         # Log metrics to wandb
@@ -669,11 +722,17 @@ def train_model(
                 'train/loss': train_history['loss'][-1] if train_history['loss'] else 0.0,
                 'train/accuracy': train_history['acc'][-1] if train_history['acc'] else 0.0,
                 'train/f1': train_history['f1'][-1] if train_history['f1'] else 0.0,
+                'train/precision': train_history['precision'][-1] if train_history['precision'] else 0.0,
+                'train/recall': train_history['recall'][-1] if train_history['recall'] else 0.0,
                 'train/auroc': train_history['auroc'][-1] if train_history['auroc'] else 0.0,
+                'train/macro_f1': train_history['macro_f1'][-1] if train_history['macro_f1'] else 0.0,
                 'val/loss': val_history['loss'][-1] if val_history['loss'] else 0.0,
                 'val/accuracy': val_history['acc'][-1] if val_history['acc'] else 0.0,
                 'val/f1': val_history['f1'][-1] if val_history['f1'] else 0.0,
+                'val/precision': val_history['precision'][-1] if val_history['precision'] else 0.0,
+                'val/recall': val_history['recall'][-1] if val_history['recall'] else 0.0,
                 'val/auroc': val_history['auroc'][-1] if val_history['auroc'] else 0.0,
+                'val/macro_f1': val_history['macro_f1'][-1] if val_history['macro_f1'] else 0.0,
                 'learning_rate': optimizer.param_groups[0]['lr'],
                 'bad_epochs': bad_epochs,
                 f'best_{monitor}': best_score,
@@ -715,6 +774,8 @@ def train_model(
         }
         if val_history.get('auroc'): postfix_dict["val_auroc"] = f"{val_history['auroc'][-1]:.4f}"
         if val_history.get('f1'): postfix_dict["val_f1"] = f"{val_history['f1'][-1]:.4f}"
+        if val_history.get('precision'): postfix_dict["val_prec"] = f"{val_history['precision'][-1]:.4f}"
+        if val_history.get('recall'): postfix_dict["val_rec"] = f"{val_history['recall'][-1]:.4f}"
         pbar.set_postfix(postfix_dict)
 
         if patience > 0 and bad_epochs >= patience:
@@ -725,9 +786,10 @@ def train_model(
     logger.info("Training completed successfully!")
     
     # Log final results
+    final_epoch = epoch if 'epoch' in locals() else num_epochs
     final_metrics = {
         "final_best_score": best_score,
-        "final_epoch": epoch,
+        "final_epoch": final_epoch,
         "total_bad_epochs": bad_epochs
     }
     logger.info(f"Final results: {final_metrics}")
@@ -820,14 +882,14 @@ def evaluate_model(
                         x_batch, _ = batch_data
                         x_batch = x_batch.to(device).float()
                         logits = model(x_batch)
-                    elif hasattr(batch_data, 'x'):
+                    elif hasattr(batch_data, 'x') and not isinstance(batch_data, (tuple, list)):
                         # Handle PyG Batch format - convert to dense and aggregate
-                        if not hasattr(batch_data, 'x'):
-                            raise ValueError("Batch data missing 'x' attribute for feature mode.")
+                        # Type guard: ensure it's not a tuple/list before accessing attributes
                         
                         # Convert PyG batch to dense format for feature processing
+                        batch_attr = getattr(batch_data, 'batch', None)
                         x_dense, mask = to_dense_batch(batch_data.x.float(), 
-                                                     batch_data.batch if hasattr(batch_data, 'batch') else None, 
+                                                     batch_attr,
                                                      fill_value=0)
                         # For feature mode, we need to aggregate node features per graph
                         # x_dense shape: (batch_size, max_nodes, features)
@@ -844,14 +906,14 @@ def evaluate_model(
                         x_batch = x_batch.to(device).float()
                         # x_batch should already be in shape (batch_size, sensors, time_steps)
                         logits = model(x_batch)
-                    elif hasattr(batch_data, 'x'):
+                    elif hasattr(batch_data, 'x') and not isinstance(batch_data, (tuple, list)):
                         # Handle PyG Batch format - reshape to signal format
-                        if not hasattr(batch_data, 'x'):
-                            raise ValueError("Batch data missing 'x' attribute for signal mode.")
+                        # Type guard: ensure it's not a tuple/list before accessing attributes
                         
                         # Convert PyG batch to dense format
+                        batch_attr = getattr(batch_data, 'batch', None)
                         x_dense, mask = to_dense_batch(batch_data.x.float(), 
-                                                     batch_data.batch if hasattr(batch_data, 'batch') else None, 
+                                                     batch_attr, 
                                                      fill_value=0)
                         # x_dense shape: (batch_size, max_nodes, features)
                         # For signal mode, we expect features to be time steps
@@ -961,11 +1023,16 @@ def train_k_fold(
     if stratified and labels is not None:
         logger.info("Using stratified k-fold with label distribution")
         kfold = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=random_state)
-        splits = list(kfold.split(range(len(dataset)), labels))
+        # Convert to numpy array for sklearn compatibility
+        indices_array = np.arange(len(dataset))
+        labels_array = np.array(labels)
+        splits = list(kfold.split(indices_array, labels_array))
     else:
         logger.info("Using regular k-fold (non-stratified)")
         kfold = KFold(n_splits=k_folds, shuffle=True, random_state=random_state)
-        splits = list(kfold.split(range(len(dataset))))
+        # Convert to numpy array for sklearn compatibility
+        indices_array = np.arange(len(dataset))
+        splits = list(kfold.split(indices_array))
     
     # Storage for results
     fold_results = []
@@ -973,7 +1040,8 @@ def train_k_fold(
     aggregated_val_history = defaultdict(list)
     
     logger.info(f"Created {len(splits)} folds")
-    
+    logger.info("Folds: %s", splits)
+
     for fold_idx, (train_indices, val_indices) in enumerate(splits):
         logger.info(f"\n{'='*60}")
         logger.info(f"FOLD {fold_idx + 1}/{k_folds}")
@@ -1182,11 +1250,90 @@ def train_k_fold(
             logger.warning(f"  Fold {fold['fold']}: {fold.get('error', 'Unknown error')}")
     
     if successful_folds:
+        # Extract all metrics from successful folds
+        metrics_to_analyze = ['f1', 'auroc', 'precision', 'recall', 'macro_f1', 'acc']
+        fold_metrics = {}
+        
+        for metric in metrics_to_analyze:
+            values = []
+            for fold in successful_folds:
+                val_history = fold.get('val_history', {})
+                if metric in val_history and val_history[metric]:
+                    # Get the best value for this metric in this fold
+                    best_val = max(val_history[metric]) if metric != 'loss' else min(val_history[metric])
+                    values.append(best_val)
+                else:
+                    # Fallback: check if best_val_score corresponds to this metric
+                    if monitor.replace('val_', '') == metric:
+                        values.append(fold['best_val_score'])
+            
+            if values:
+                fold_metrics[metric] = values
+        
+        # Calculate comprehensive statistics for each metric
+        logger.info(f"\n📊 COMPREHENSIVE METRICS SUMMARY:")
+        logger.info(f"{'='*70}")
+        
+        summary_stats = {}
+        for metric, values in fold_metrics.items():
+            if values:
+                mean_val = np.mean(values)
+                std_val = np.std(values)
+                median_val = np.median(values)
+                q25 = np.percentile(values, 25)
+                q75 = np.percentile(values, 75)
+                iqr = q75 - q25
+                min_val = np.min(values)
+                max_val = np.max(values)
+                
+                summary_stats[metric] = {
+                    'values': values,
+                    'mean': mean_val,
+                    'std': std_val,
+                    'median': median_val,
+                    'q25': q25,
+                    'q75': q75,
+                    'iqr': iqr,
+                    'min': min_val,
+                    'max': max_val
+                }
+                
+                logger.info(f"\n{metric.upper()} Results:")
+                logger.info(f"  Mean ± Std:     {mean_val:.4f} ± {std_val:.4f}")
+                logger.info(f"  Median [IQR]:   {median_val:.4f} [{q25:.4f}, {q75:.4f}]")
+                logger.info(f"  Range:          [{min_val:.4f}, {max_val:.4f}]")
+                logger.info(f"  Individual folds: {[f'{v:.4f}' for v in values]}")
+        
+        # Report in your requested format
+        logger.info(f"\n📋 REPORT SUMMARY (Copy to your report):")
+        logger.info(f"{'='*70}")
+        
+        if 'macro_f1' in summary_stats:
+            stats = summary_stats['macro_f1']
+            logger.info(f"• Macro F1-score: {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+        
+        if 'auroc' in summary_stats:
+            stats = summary_stats['auroc']
+            logger.info(f"• AUC: {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+        
+        if 'f1' in summary_stats:
+            stats = summary_stats['f1']
+            logger.info(f"• F1 (seizure): {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+        
+        if 'recall' in summary_stats:
+            stats = summary_stats['recall']
+            logger.info(f"• Recall: {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+        
+        if 'precision' in summary_stats:
+            stats = summary_stats['precision']
+            logger.info(f"• Precision: {stats['mean']:.4f} ± {stats['std']:.4f} (Med: {stats['median']:.4f}, IQR: {stats['iqr']:.4f})")
+        
+        # Legacy summary for the monitored metric
         val_scores = [f['best_val_score'] for f in successful_folds]
         mean_score = sum(val_scores) / len(val_scores)
         std_score = (sum((x - mean_score) ** 2 for x in val_scores) / len(val_scores)) ** 0.5
         
-        logger.info(f"\n{monitor} Results:")
+        logger.info(f"\n{monitor} Results (Primary Metric):")
         logger.info(f"  Mean: {mean_score:.4f} ± {std_score:.4f}")
         logger.info(f"  Min:  {min(val_scores):.4f}")
         logger.info(f"  Max:  {max(val_scores):.4f}")
@@ -1207,6 +1354,17 @@ def train_k_fold(
                     'k_fold_summary/failed_folds': len(failed_folds),
                 }
                 
+                # Add all metrics to wandb summary
+                for metric, stats in summary_stats.items():
+                    summary_config.update({
+                        f'k_fold_summary/{metric}_mean': stats['mean'],
+                        f'k_fold_summary/{metric}_std': stats['std'],
+                        f'k_fold_summary/{metric}_median': stats['median'],
+                        f'k_fold_summary/{metric}_iqr': stats['iqr'],
+                        f'k_fold_summary/{metric}_min': stats['min'],
+                        f'k_fold_summary/{metric}_max': stats['max'],
+                    })
+                
                 # Log summary in a separate run
                 summary_run = wandb.init( # type: ignore
                     project=wandb_project or "neuro-graph-net",
@@ -1216,7 +1374,7 @@ def train_k_fold(
                 )
                 wandb.log(summary_config) # type: ignore
                 wandb.finish() # type: ignore
-                logger.info("Logged k-fold summary to wandb")
+                logger.info("Logged comprehensive k-fold summary to wandb")
                 
             except Exception as e:
                 logger.warning(f"Could not log k-fold summary to wandb: {e}")
@@ -1233,16 +1391,23 @@ def train_k_fold(
     if successful_folds:
         val_scores = [f['best_val_score'] for f in successful_folds]
         summary_data.update({
-            'mean_score': sum(val_scores) / len(val_scores),
-            'std_score': (sum((x - sum(val_scores) / len(val_scores)) ** 2 for x in val_scores) / len(val_scores)) ** 0.5,
-            'min_score': min(val_scores),
-            'max_score': max(val_scores),
+            'primary_metric': {
+                'mean_score': sum(val_scores) / len(val_scores),
+                'std_score': (sum((x - sum(val_scores) / len(val_scores)) ** 2 for x in val_scores) / len(val_scores)) ** 0.5,
+                'min_score': min(val_scores),
+                'max_score': max(val_scores),
+            }
         })
+        
+        # Add comprehensive metrics summary to JSON
+        summary_stats = locals().get('summary_stats', {})
+        if summary_stats:
+            summary_data['comprehensive_metrics'] = summary_stats
     
     with open(summary_path, 'w') as f:
         json.dump(summary_data, f, indent=2, default=str)
     
-    logger.info(f"Saved k-fold summary to {summary_path}")
+    logger.info(f"Saved comprehensive k-fold summary to {summary_path}")
     logger.info("K-fold cross-validation completed!")
     
     return dict(aggregated_train_history), dict(aggregated_val_history), fold_results
