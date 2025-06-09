@@ -86,7 +86,7 @@ class EEGCNNBiLSTMGAT(nn.Module):
 
         # Initialize the temporal encoder (CNN-BiLSTM)
         self.channel_encoder = EEGCNNBiLSTMEncoder(
-            in_channels=node_input_dim,
+            in_channels=1,  # CNN expects 1 input channel for EEG time series
             cnn_dropout=cnn_dropout,
             lstm_hidden_dim=lstm_hidden_dim,
             lstm_out_dim=lstm_out_dim,
@@ -140,8 +140,8 @@ class EEGCNNBiLSTMGAT(nn.Module):
 
         Args:
             x (torch.Tensor): Input EEG signals. Expected shape:
-                            [num_graphs_in_batch, num_channels, time_steps]
-                            For example, [batch_size, 19, 3000].
+                            [num_graphs_in_batch * num_channels, time_steps]
+                            For example, [batch_size * 19, 3000].
             edge_index (torch.Tensor): Graph connectivity in COO format. Shape: [2, num_edges_in_batch].
                                      Node indices are assumed to be global across the batch
                                      as handled by PyTorch Geometric's DataLoader.
@@ -155,7 +155,7 @@ class EEGCNNBiLSTMGAT(nn.Module):
         """
         # Step 1: Encode each channel's time series into a fixed-size embedding
         # The temporal encoder processes all graphs and channels in parallel
-        # Input shape: [num_graphs_in_batch, num_channels, time_steps]
+        # Input shape: [num_graphs_in_batch * num_channels, time_steps]  
         # Output shape: [num_graphs_in_batch * num_channels, lstm_out_dim]
         node_features = self.channel_encoder(x)
 
