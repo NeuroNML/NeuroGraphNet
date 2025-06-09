@@ -65,8 +65,8 @@ class EEGCNNEncoder(nn.Module):
         self.bn3 = nn.BatchNorm1d(out_dim) if self.use_batch_norm else nn.Identity()
 
         # Global Pooling Layer
+        self.global_pool_output = global_pool_output
         self.pool = nn.AdaptiveAvgPool1d(1) if global_pool_output else nn.Identity()
-
 
         self._init_weights()
 
@@ -116,8 +116,4 @@ class EEGCNNEncoder(nn.Module):
         # Apply global pooling only if configured
         if self.global_pool_output:
             x = self.pool(x).squeeze(-1) # shape: (B, out_dim)
-        return x
-
-        if self.pool.output_size == 1:
-            x = x.squeeze(-1)  # Shape: [B, out_dim]
         return x
