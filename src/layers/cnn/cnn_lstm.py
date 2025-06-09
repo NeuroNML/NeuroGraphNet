@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
-from layers.encoders.cnnbilstm_encoder import EEGCNNBiLSTMEncoder
+from src.layers.encoders.cnnbilstm_encoder import EEGCNNBiLSTMEncoder
 from src.layers.mlp.mlp import EEGMLPClassifier
 from src.layers.encoders.cnn_encoder import EEGCNNEncoder
 
@@ -13,7 +13,7 @@ class EEGCNNLSTMClassifier(nn.Module):
         self,
         input_channels=1,           # For EEGCNNBiLSTMEncoder: E.g., 1 for single-channel, or num_electrodes
         # EEGCNNEncoder parameters (passed through EEGCNNBiLSTMEncoder)
-        cnn_out_channels=128,        # Output channels of CNN in EEGCNNBiLSTMEncoder
+        cnn_out_dim=128,        # Output channels of CNN in EEGCNNBiLSTMEncoder
         cnn_dropout_prob=0.25,
         cnn_use_batch_norm=True,
         # EEGBiLSTMEncoder parameters (passed through EEGCNNBiLSTMEncoder)
@@ -36,7 +36,7 @@ class EEGCNNLSTMClassifier(nn.Module):
         # (lstm_out_dim) rather than a classification score.
         self.cnn_lstm_encoder = EEGCNNBiLSTMEncoder(
             in_channels=input_channels,
-            cnn_out_channels=cnn_out_channels,
+            cnn_out_channels=cnn_out_dim,
             cnn_dropout=cnn_dropout_prob,
             use_cnn_batch_norm=cnn_use_batch_norm,
             lstm_hidden_dim=lstm_hidden_dim,
