@@ -408,6 +408,16 @@ class TimeseriesEEGDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.root and self._processed_items_count > 0:
+            # if idx is not a valid index, raise IndexError
+            if type(idx) is not int:
+                # cast
+                try:
+                    idx = int(idx)
+                except ValueError:
+                    raise IndexError(f"Index {idx} is not an integer.")
+            # Check if idx is within the range of processed items
+            if type(idx) is not int or idx < 0 or idx >= self._processed_items_count:
+                raise IndexError(f"Index {idx} out of range [0, {self._processed_items_count})")
             return self._get_cached_item(idx)
         return self.samples[idx]
     

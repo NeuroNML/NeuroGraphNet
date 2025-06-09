@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 
-class EEGLSTM(nn.Module):
+class EEGLSTMClassifier(nn.Module):
     """
     LSTM model for EEG signal processing.
     """

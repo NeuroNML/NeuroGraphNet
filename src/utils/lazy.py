@@ -4,7 +4,7 @@ from src.data.geodataloader import GeoDataLoader
 import numpy as np
 import torch
 
-from utils.general_funcs import labels_stats
+from src.utils.general_funcs import labels_stats
 
 class LazyDataLoaderManager:
     """
@@ -75,7 +75,7 @@ class LazyDataLoaderManager:
         self._create_subsets(dataset_type)
         
         subsets, config = self._data_subsets[dataset_type], self.datasets_config[dataset_type]
-        LoaderClass = GeoDataLoader if dataset_type not in ['signal', 'features'] else DataLoader
+        LoaderClass = GeoDataLoader if dataset_type not in ['signal', 'feature'] else DataLoader
 
         self._loaders[dataset_type] = {
             'train': LoaderClass(subsets['train'], batch_size=self.batch_size, sampler=subsets['sampler'], drop_last=True),
@@ -95,7 +95,7 @@ class LazyDataLoaderManager:
         
         if dataset_type in ['spatial', 'correlation', 'absdiff_correlation']:
             info.update({'feature_dim': len([k for k in sample if k.startswith('graph_')])})
-        elif dataset_type == 'features':
+        elif dataset_type == 'feature':
             info.update({'feature_dim': sample[0].shape[-1], 'sequence_length': sample[0].shape[0]})
         elif dataset_type == 'signal':
             info.update({'channels': sample[0].shape[0], 'sequence_length': sample[0].shape[1]})
@@ -141,7 +141,7 @@ class TrainingContext:
         if dataset_type not in self.data_manager.datasets_config:
             raise ValueError(f"Dataset type '{dataset_type}' is not recognized. Available types: {list(self.data_manager.datasets_config.keys())}")
         # Ensure the dataset type is valid
-        if dataset_type not in ['spatial', 'correlation', 'absdiff_correlation', 'features', 'signal']:
+        if dataset_type not in ['spatial', 'correlation', 'absdiff_correlation', 'feature', 'signal']:
             raise ValueError(f"Invalid dataset type '{dataset_type}'. Supported types: spatial, correlation, absdiff_correlation, features, signal.")
         
         # Update the dataset type and informational attributes
