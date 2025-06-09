@@ -19,6 +19,8 @@ from src.data.dataset_graph import GraphEEGDataset
 from sklearn.model_selection import KFold, StratifiedKFold
 from torch_geometric.data import Dataset
 
+from utils.timeseries_eeg_dataset import TimeseriesEEGDataset
+
 # Import wandb with optional fallback
 try:
     import wandb
@@ -892,7 +894,8 @@ def evaluate_model(
     return sub_df
 
 def train_k_fold(
-    dataset: Dataset,
+    dataset: GraphEEGDataset | TimeseriesEEGDataset,
+    labels: List[int],
     model_class: type,
     model_kwargs: Dict[str, Any],
     criterion: nn.Module,
@@ -953,35 +956,6 @@ def train_k_fold(
     
     # Create save directory
     save_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Extract labels for splitting
-    try:
-        # Try accessing labels using dataset["label"] (works for DataFrames)
-        labels = dataset["label"]
-    except (KeyError, TypeError):
-        # Try accessing using attribute (works for custom datasets)
-        try:
-            if hasattr(dataset, 'labels') and dataset.labels is not None:
-                labels = dataset.labels
-                logger.info("Using labels from dataset.labels")
-            elif hasattr(dataset, 'y'):
-                labels = dataset.y
-                logger.info("Using labels from dataset.y")
-            elif hasattr(dataset, 'data') and hasattr(dataset.data, 'y'):
-                labels = dataset.data.y
-                logger.info("Using labels from dataset.data.y")
-            elif hasattr(dataset, 'clips') and hasattr(dataset.clips, 'label'):
-                labels = dataset.clips.label.values
-                logger.info("Using labels from dataset.clips.label")
-            else:
-                # Fall back to non-stratified if no labels are found
-                logger.warning("Could not find labels in dataset. Falling back to non-stratified k-fold.")
-                stratified = False
-                labels = None
-        except Exception as e:
-            logger.warning(f"Error accessing labels: {str(e)}. Falling back to non-stratified k-fold.")
-            stratified = False
-            labels = None
     
     # Initialize k-fold splitter
     if stratified and labels is not None:
