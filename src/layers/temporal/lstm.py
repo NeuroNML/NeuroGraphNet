@@ -53,32 +53,28 @@ class EEGLSTMClassifier(nn.Module):
             output = self.fc(last_hidden_state_dropped)
             return output
         elif self.input_type == 'signal':
-            # x shape: (batch_size, sensors, time_steps) -> (512, 19, 3000)
-            # Reshape to (batch_size * sensors, time_steps, 1) for LSTM processing
-            batch_size, n_sensors, time_steps = x.shape
-            x = x.view(batch_size * n_sensors, time_steps, 1)
+            # x shape: (batch_size, n_sensors, time_steps) -> e.g., (512, 19, 3000)
+            # Transpose to process each sensor's signal as a sequence
+            # From (batch_size, n_sensors, time_steps) to (batch_size, time_steps, n_sensors)
+            x = x.transpose(1, 2)  # (batch_size, time_steps, n_sensors)
             
+            # Process the multi-sensor signal through LSTM
             lstm_out, (hn, cn) = self.lstm(x)
             
+            # Extract final hidden state
             if self.bidirectional:
                 # For bidirectional LSTM, concatenate forward and backward hidden states
+                # hn shape: (num_layers * 2, batch_size, hidden_dim)
                 forward_hidden = hn[-2]  # Forward direction of last layer
                 backward_hidden = hn[-1]  # Backward direction of last layer
-                last_hidden_state = torch.cat([forward_hidden, backward_hidden], dim=1)
-                # last_hidden_state shape: (batch_size * n_sensors, hidden_dim * 2)
-                effective_hidden_dim = self.hidden_dim * 2
+                final_hidden = torch.cat([forward_hidden, backward_hidden], dim=1)
             else:
-                last_hidden_state = hn[-1]  # (batch_size * n_sensors, hidden_dim)
-                effective_hidden_dim = self.hidden_dim
+                # For unidirectional LSTM
+                final_hidden = hn[-1]  # (batch_size, hidden_dim)
             
-            # Reshape back to (batch_size, n_sensors, effective_hidden_dim)
-            last_hidden_state = last_hidden_state.view(batch_size, n_sensors, effective_hidden_dim)
-            
-            # Aggregate across sensors (mean pooling)
-            aggregated = torch.mean(last_hidden_state, dim=1)  # (batch_size, effective_hidden_dim)
-            
-            aggregated_dropped = self.dropout_fc(aggregated)
-            output = self.fc(aggregated_dropped)
+            # Apply dropout and final classification layer
+            final_hidden_dropped = self.dropout_fc(final_hidden)
+            output = self.fc(final_hidden_dropped)
             return output
         elif self.input_type == 'embedding':
             raise NotImplementedError("Embedding type is not implemented yet.")
