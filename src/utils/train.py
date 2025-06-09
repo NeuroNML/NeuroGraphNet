@@ -955,13 +955,41 @@ def train_k_fold(
     save_dir.mkdir(parents=True, exist_ok=True)
     
     # Extract labels for splitting
-    labels = dataset["label"]
+    try:
+        # Try accessing labels using dataset["label"] (works for DataFrames)
+        labels = dataset["label"]
+    except (KeyError, TypeError):
+        # Try accessing using attribute (works for custom datasets)
+        try:
+            if hasattr(dataset, 'labels') and dataset.labels is not None:
+                labels = dataset.labels
+                logger.info("Using labels from dataset.labels")
+            elif hasattr(dataset, 'y'):
+                labels = dataset.y
+                logger.info("Using labels from dataset.y")
+            elif hasattr(dataset, 'data') and hasattr(dataset.data, 'y'):
+                labels = dataset.data.y
+                logger.info("Using labels from dataset.data.y")
+            elif hasattr(dataset, 'clips') and hasattr(dataset.clips, 'label'):
+                labels = dataset.clips.label.values
+                logger.info("Using labels from dataset.clips.label")
+            else:
+                # Fall back to non-stratified if no labels are found
+                logger.warning("Could not find labels in dataset. Falling back to non-stratified k-fold.")
+                stratified = False
+                labels = None
+        except Exception as e:
+            logger.warning(f"Error accessing labels: {str(e)}. Falling back to non-stratified k-fold.")
+            stratified = False
+            labels = None
     
     # Initialize k-fold splitter
-    if stratified:
+    if stratified and labels is not None:
+        logger.info("Using stratified k-fold with label distribution")
         kfold = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=random_state)
         splits = list(kfold.split(range(len(dataset)), labels))
     else:
+        logger.info("Using regular k-fold (non-stratified)")
         kfold = KFold(n_splits=k_folds, shuffle=True, random_state=random_state)
         splits = list(kfold.split(range(len(dataset))))
     
@@ -1146,6 +1174,7 @@ def train_k_fold(
             logger.info(f"Best {monitor}: {best_val_score:.4f}")
             
         except Exception as e:
+
             logger.error(f"Error training fold {fold_idx + 1}: {str(e)}")
             # Store failed fold result
             fold_result = {
@@ -1162,7 +1191,7 @@ def train_k_fold(
                 'error': str(e),
             }
             fold_results.append(fold_result)
-            continue
+            raise # Re-raise to stop further processing of folds
     
     # Calculate and log summary statistics
     logger.info(f"\n{'='*60}")
