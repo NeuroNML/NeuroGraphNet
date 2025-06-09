@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple, Dict, Any, Union
 import time  # Add time import
 import logging  # Add logging import
 import inspect  # Add inspect for checking function signatures
-
+import json
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -14,6 +14,10 @@ from torchmetrics.functional import accuracy, f1_score, auroc
 from torch_geometric.utils import to_dense_batch
 from src.data.geodataloader import GeoDataLoader
 from src.data.dataset_graph import GraphEEGDataset 
+
+# k-fold
+from sklearn.model_selection import KFold, StratifiedKFold
+from torch_geometric.data import Dataset
 
 # Import wandb with optional fallback
 try:
@@ -886,3 +890,361 @@ def evaluate_model(
 
     # return submission dataframe
     return sub_df
+
+def train_k_fold(
+    dataset: Dataset,
+    model_class: type,
+    model_kwargs: Dict[str, Any],
+    criterion: nn.Module,
+    optimizer_class: type,
+    optimizer_kwargs: Dict[str, Any],
+    device: torch.device,
+    save_dir: Path,
+    k_folds: int = 5,
+    stratified: bool = True,
+    scheduler_class: Optional[type] = None,
+    scheduler_kwargs: Optional[Dict[str, Any]] = None,
+    monitor: str = "val_f1",
+    patience: int = 15,
+    num_epochs: int = 100,
+    grad_clip: float = 1.0,
+    batch_size: int = 32,
+    use_gnn: bool = True,
+    wandb_config: Optional[Dict[str, Any]] = None,
+    wandb_project: Optional[str] = None,
+    log_wandb: bool = True,
+    random_state: int = 42,
+) -> Tuple[Dict[str, List[float]], Dict[str, List[float]], List[Dict[str, Any]]]:
+    """
+    Perform k-fold cross-validation training.
+    
+    Args:
+        dataset: The dataset to split into k folds
+        model_class: Class of the model to instantiate for each fold
+        model_kwargs: Keyword arguments for model instantiation
+        criterion: Loss function
+        optimizer_class: Optimizer class (e.g., torch.optim.Adam)
+        optimizer_kwargs: Keyword arguments for optimizer
+        device: Device to train on
+        save_dir: Directory to save fold checkpoints
+        k_folds: Number of folds for cross-validation
+        stratified: Whether to use stratified k-fold (maintains class distribution)
+        scheduler_class: Optional learning rate scheduler class
+        scheduler_kwargs: Keyword arguments for scheduler
+        monitor: Metric to monitor for early stopping
+        patience: Early stopping patience
+        num_epochs: Maximum number of epochs per fold
+        grad_clip: Gradient clipping value
+        batch_size: Batch size for data loaders
+        use_gnn: Whether using GNN models
+        wandb_config: Configuration for wandb logging
+        wandb_project: Wandb project name
+        log_wandb: Whether to log to wandb
+        random_state: Random seed for reproducible splits
+        
+    Returns:
+        Tuple of (aggregated_train_history, aggregated_val_history, fold_results)
+    """
+    logger.info(f"Starting {k_folds}-fold cross-validation")
+    logger.info(f"Dataset size: {len(dataset)}")
+    logger.info(f"Stratified: {stratified}")
+    logger.info(f"Batch size: {batch_size}")
+    
+    # Create save directory
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Extract labels for splitting
+    labels = []
+    for i in range(len(dataset)):
+        data = dataset[i]
+        if hasattr(data, 'y'):
+            labels.append(data.y.item() if data.y.dim() > 0 else data.y)
+        else:
+            raise ValueError("Dataset items must have 'y' attribute containing labels")
+    
+    # Initialize k-fold splitter
+    if stratified:
+        kfold = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=random_state)
+        splits = list(kfold.split(range(len(dataset)), labels))
+    else:
+        kfold = KFold(n_splits=k_folds, shuffle=True, random_state=random_state)
+        splits = list(kfold.split(range(len(dataset))))
+    
+    # Storage for results
+    fold_results = []
+    aggregated_train_history = defaultdict(list)
+    aggregated_val_history = defaultdict(list)
+    
+    logger.info(f"Created {len(splits)} folds")
+    
+    for fold_idx, (train_indices, val_indices) in enumerate(splits):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"FOLD {fold_idx + 1}/{k_folds}")
+        logger.info(f"{'='*60}")
+        logger.info(f"Train samples: {len(train_indices)}")
+        logger.info(f"Val samples: {len(val_indices)}")
+        
+        # Calculate class distribution for this fold
+        train_labels = [labels[i] for i in train_indices]
+        val_labels = [labels[i] for i in val_indices]
+        train_pos_ratio = sum(train_labels) / len(train_labels) if train_labels else 0
+        val_pos_ratio = sum(val_labels) / len(val_labels) if val_labels else 0
+        logger.info(f"Train positive ratio: {train_pos_ratio:.3f}")
+        logger.info(f"Val positive ratio: {val_pos_ratio:.3f}")
+        
+        # Create subset datasets
+        train_subset = torch.utils.data.Subset(dataset, train_indices)
+        val_subset = torch.utils.data.Subset(dataset, val_indices)
+        
+        # Create data loaders
+        if use_gnn:
+            train_loader = GeoDataLoader(
+                train_subset, 
+                batch_size=batch_size, 
+                shuffle=True,
+            )
+            val_loader = GeoDataLoader(
+                val_subset, 
+                batch_size=batch_size, 
+                shuffle=False,
+            )
+        else:
+            train_loader = torch.utils.data.DataLoader(
+                train_subset, 
+                batch_size=batch_size, 
+                shuffle=True
+            )
+            val_loader = torch.utils.data.DataLoader(
+                val_subset, 
+                batch_size=batch_size, 
+                shuffle=False
+            )
+        
+        # Initialize model for this fold
+        model = model_class(**model_kwargs).to(device)
+        logger.info(f"Initialized model: {model.__class__.__name__}")
+        
+        # Initialize optimizer
+        optimizer = optimizer_class(model.parameters(), **optimizer_kwargs)
+        logger.info(f"Initialized optimizer: {optimizer.__class__.__name__}")
+        
+        # Initialize scheduler if provided
+        scheduler = None
+        if scheduler_class is not None:
+            scheduler_kwargs_safe = scheduler_kwargs or {}
+            scheduler = scheduler_class(optimizer, **scheduler_kwargs_safe)
+            logger.info(f"Initialized scheduler: {scheduler.__class__.__name__}")
+        
+        # Set up paths for this fold
+        fold_save_path = save_dir / f"fold_{fold_idx + 1}_best_model.pth"
+        
+        # Prepare wandb config for this fold
+        fold_wandb_config = {
+            'fold': fold_idx + 1,
+            'k_folds': k_folds,
+            'train_samples': len(train_indices),
+            'val_samples': len(val_indices),
+            'train_pos_ratio': train_pos_ratio,
+            'val_pos_ratio': val_pos_ratio,
+        }
+        if wandb_config:
+            fold_wandb_config.update(wandb_config)
+        
+        # Set wandb run name for this fold
+        fold_wandb_run_name = f"fold_{fold_idx + 1}"
+        if wandb_config and 'run_name' in wandb_config:
+            fold_wandb_run_name = f"{wandb_config['run_name']}_fold_{fold_idx + 1}"
+        
+        try:
+            # Train this fold
+            logger.info(f"Starting training for fold {fold_idx + 1}")
+            train_history, val_history = train_model(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                criterion=criterion,
+                optimizer=optimizer,
+                device=device,
+                save_path=fold_save_path,
+                scheduler=scheduler,
+                monitor=monitor,
+                patience=patience,
+                num_epochs=num_epochs,
+                grad_clip=grad_clip,
+                overwrite=True, # Always overwrite for k-fold
+                use_gnn=use_gnn,
+                wandb_config=fold_wandb_config,
+                wandb_project=wandb_project,
+                wandb_run_name=fold_wandb_run_name,
+                log_wandb=log_wandb,
+                try_load_checkpoint=False,  # Don't load checkpoint for k-fold
+            )
+            
+            # Get best scores for this fold
+            best_train_score = max(train_history.get(monitor.replace('val_', ''), [0])) if 'val_' in monitor else min(train_history.get('loss', [float('inf')]))
+            best_val_score = max(val_history.get(monitor.replace('val_', ''), [0])) if 'val_' not in monitor else (
+                max(val_history.get(monitor.replace('val_', ''), [0])) if monitor not in ['val_loss'] else min(val_history.get('loss', [float('inf')]))
+            )
+            
+            # Store fold results
+            fold_result = {
+                'fold': fold_idx + 1,
+                'train_samples': len(train_indices),
+                'val_samples': len(val_indices),
+                'train_pos_ratio': train_pos_ratio,
+                'val_pos_ratio': val_pos_ratio,
+                'best_train_score': best_train_score,
+                'best_val_score': best_val_score,
+                'train_history': train_history,
+                'val_history': val_history,
+                'checkpoint_path': fold_save_path,
+            }
+            fold_results.append(fold_result)
+            
+            # Aggregate histories (for averaging across folds)
+            for metric, values in train_history.items():
+                if values:  # Only if we have values
+                    # Pad or truncate to match the length of existing aggregated history
+                    if aggregated_train_history[metric]:
+                        max_len = max(len(aggregated_train_history[metric]), len(values))
+                        # Extend current aggregated list if needed
+                        while len(aggregated_train_history[metric]) < max_len:
+                            aggregated_train_history[metric].append(aggregated_train_history[metric][-1] if aggregated_train_history[metric] else 0)
+                        # Extend current fold values if needed
+                        values_extended = values[:]
+                        while len(values_extended) < max_len:
+                            values_extended.append(values_extended[-1] if values_extended else 0)
+                        # Average with existing values
+                        for i in range(max_len):
+                            if i < len(aggregated_train_history[metric]):
+                                aggregated_train_history[metric][i] = (
+                                    aggregated_train_history[metric][i] * fold_idx + values_extended[i]
+                                ) / (fold_idx + 1)
+                            else:
+                                aggregated_train_history[metric].append(values_extended[i])
+                    else:
+                        aggregated_train_history[metric] = values[:]
+            
+            for metric, values in val_history.items():
+                if values:  # Only if we have values
+                    if aggregated_val_history[metric]:
+                        max_len = max(len(aggregated_val_history[metric]), len(values))
+                        # Extend current aggregated list if needed
+                        while len(aggregated_val_history[metric]) < max_len:
+                            aggregated_val_history[metric].append(aggregated_val_history[metric][-1] if aggregated_val_history[metric] else 0)
+                        # Extend current fold values if needed
+                        values_extended = values[:]
+                        while len(values_extended) < max_len:
+                            values_extended.append(values_extended[-1] if values_extended else 0)
+                        # Average with existing values
+                        for i in range(max_len):
+                            if i < len(aggregated_val_history[metric]):
+                                aggregated_val_history[metric][i] = (
+                                    aggregated_val_history[metric][i] * fold_idx + values_extended[i]
+                                ) / (fold_idx + 1)
+                            else:
+                                aggregated_val_history[metric].append(values_extended[i])
+                    else:
+                        aggregated_val_history[metric] = values[:]
+            
+            logger.info(f"Fold {fold_idx + 1} completed successfully")
+            logger.info(f"Best {monitor}: {best_val_score:.4f}")
+            
+        except Exception as e:
+            logger.error(f"Error training fold {fold_idx + 1}: {str(e)}")
+            # Store failed fold result
+            fold_result = {
+                'fold': fold_idx + 1,
+                'train_samples': len(train_indices),
+                'val_samples': len(val_indices),
+                'train_pos_ratio': train_pos_ratio,
+                'val_pos_ratio': val_pos_ratio,
+                'best_train_score': 0.0,
+                'best_val_score': 0.0,
+                'train_history': {},
+                'val_history': {},
+                'checkpoint_path': fold_save_path,
+                'error': str(e),
+            }
+            fold_results.append(fold_result)
+            continue
+    
+    # Calculate and log summary statistics
+    logger.info(f"\n{'='*60}")
+    logger.info(f"K-FOLD CROSS-VALIDATION SUMMARY")
+    logger.info(f"{'='*60}")
+    
+    successful_folds = [f for f in fold_results if 'error' not in f]
+    failed_folds = [f for f in fold_results if 'error' in f]
+    
+    logger.info(f"Successful folds: {len(successful_folds)}/{k_folds}")
+    if failed_folds:
+        logger.warning(f"Failed folds: {len(failed_folds)}")
+        for fold in failed_folds:
+            logger.warning(f"  Fold {fold['fold']}: {fold.get('error', 'Unknown error')}")
+    
+    if successful_folds:
+        val_scores = [f['best_val_score'] for f in successful_folds]
+        mean_score = sum(val_scores) / len(val_scores)
+        std_score = (sum((x - mean_score) ** 2 for x in val_scores) / len(val_scores)) ** 0.5
+        
+        logger.info(f"\n{monitor} Results:")
+        logger.info(f"  Mean: {mean_score:.4f} ± {std_score:.4f}")
+        logger.info(f"  Min:  {min(val_scores):.4f}")
+        logger.info(f"  Max:  {max(val_scores):.4f}")
+        
+        # Log individual fold results
+        for fold in successful_folds:
+            logger.info(f"  Fold {fold['fold']}: {fold['best_val_score']:.4f}")
+        
+        # Log final summary to wandb if enabled
+        if log_wandb and WANDB_AVAILABLE:
+            try:
+                summary_config = {
+                    'k_fold_summary/mean_score': mean_score,
+                    'k_fold_summary/std_score': std_score,
+                    'k_fold_summary/min_score': min(val_scores),
+                    'k_fold_summary/max_score': max(val_scores),
+                    'k_fold_summary/successful_folds': len(successful_folds),
+                    'k_fold_summary/failed_folds': len(failed_folds),
+                }
+                
+                # Log summary in a separate run
+                summary_run = wandb.init( # type: ignore
+                    project=wandb_project or "neuro-graph-net",
+                    name=f"k_fold_summary_{k_folds}folds",
+                    config=summary_config,
+                    reinit=True
+                )
+                wandb.log(summary_config) # type: ignore
+                wandb.finish() # type: ignore
+                logger.info("Logged k-fold summary to wandb")
+                
+            except Exception as e:
+                logger.warning(f"Could not log k-fold summary to wandb: {e}")
+    
+    # Save summary results
+    summary_path = save_dir / "k_fold_summary.json"
+    summary_data = {
+        'k_folds': k_folds,
+        'successful_folds': len(successful_folds),
+        'failed_folds': len(failed_folds),
+        'fold_results': fold_results,
+        'monitor': monitor,
+    }
+    if successful_folds:
+        val_scores = [f['best_val_score'] for f in successful_folds]
+        summary_data.update({
+            'mean_score': sum(val_scores) / len(val_scores),
+            'std_score': (sum((x - sum(val_scores) / len(val_scores)) ** 2 for x in val_scores) / len(val_scores)) ** 0.5,
+            'min_score': min(val_scores),
+            'max_score': max(val_scores),
+        })
+    
+    with open(summary_path, 'w') as f:
+        json.dump(summary_data, f, indent=2, default=str)
+    
+    logger.info(f"Saved k-fold summary to {summary_path}")
+    logger.info("K-fold cross-validation completed!")
+    
+    return dict(aggregated_train_history), dict(aggregated_val_history), fold_results

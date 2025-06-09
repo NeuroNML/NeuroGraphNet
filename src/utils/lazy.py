@@ -117,6 +117,7 @@ class TrainingContext:
         self.train_loader: Optional[DataLoader] = None
         self.val_loader: Optional[DataLoader] = None
         self.test_loader: Optional[DataLoader] = None
+        self.clips = None
         self.info = {}
         print("✅ TrainingContext initialized. Use .switch_to('dataset_type') to begin.")
 
@@ -138,6 +139,7 @@ class TrainingContext:
         self.train_loader = loaders['train']
         self.val_loader = loaders['val']
         self.test_loader = loaders['test']
+        self.clips = self.data_manager.datasets_config[dataset_type]['clips_tr']
 
         # ensure that all loaders are of the same type
         if not all(isinstance(loader, type(self.train_loader)) for loader in [self.val_loader, self.test_loader]):
