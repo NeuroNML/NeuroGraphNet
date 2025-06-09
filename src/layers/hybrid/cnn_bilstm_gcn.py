@@ -89,9 +89,9 @@ class EEGCNNBiLSTMGCN(nn.Module):
             lstm_hidden_dim=lstm_hidden_dim,
             lstm_out_dim=lstm_out_dim,
             lstm_dropout=lstm_dropout,
-            num_layers=lstm_num_layers,
-            use_batch_norm=encoder_use_batch_norm,
-            use_layer_norm=encoder_use_layer_norm,
+            num_lstm_layers=lstm_num_layers,
+            use_lstm_layer_norm=encoder_use_batch_norm,
+            use_cnn_batch_norm=encoder_use_batch_norm,
             add_classifier=False,
         )
 

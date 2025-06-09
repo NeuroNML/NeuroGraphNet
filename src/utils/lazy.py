@@ -89,22 +89,7 @@ class LazyDataLoaderManager:
         Provides a summary of dimensions and properties for a given dataset type.
         """
         config = self.datasets_config[dataset_type]
-        sample = config['dataset_tr'][0]
-        
-        info = {'type': dataset_type, 'total_train_samples': len(config['dataset_tr'])}
-        
-        try:
-            if dataset_type in ['spatial', 'correlation', 'absdiff_correlation']:
-                info.update({'feature_dim': len([k for k in sample.columns if k.startswith('graph_')])})
-            elif dataset_type == 'feature':
-                info.update({'feature_dim': sample[0].shape[-1], 'sequence_length': sample[0].shape[0]})
-            elif dataset_type == 'signal':
-                info.update({'channels': sample[0].shape[0], 'sequence_length': sample[0].shape[1]})
-        except Exception as e:
-            print(f"Error extracting dataset info for '{dataset_type}': {e}")
-            info.update({'feature_dim': None, 'sequence_length': None, 'channels': None})
-            
-        return info
+        return {'type': dataset_type, 'total_train_samples': len(config['dataset_tr'])}
 
 
 class TrainingContext:
