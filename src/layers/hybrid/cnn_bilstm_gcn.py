@@ -90,8 +90,8 @@ class EEGCNNBiLSTMGCN(nn.Module):
             lstm_out_dim=lstm_out_dim,
             lstm_dropout=lstm_dropout,
             num_lstm_layers=lstm_num_layers,
-            use_lstm_layer_norm=encoder_use_batch_norm,
-            use_cnn_batch_norm=encoder_use_batch_norm,
+            use_lstm_layer_norm=True,
+            use_cnn_batch_norm=False,
             add_classifier=False,
         )
 
@@ -105,13 +105,18 @@ class EEGCNNBiLSTMGCN(nn.Module):
             num_conv_layers=num_conv_layers,
             pooling_type=pooling_type,
             dropout_prob=gcn_dropout,
-            use_batch_norm=gcn_use_batch_norm,
+            use_batch_norm=False,
             use_cnn_preprocessing=False, # no feature reduction since we use directly the LSTM output
             mlp_dims=None, # Disable built-in classifier, as we need a more complex one
         )
 
         # Classifier layers to map GCN output to class logits.
-        self.classifier = nn.Linear(hidden_dim // 2, num_classes)
+        self.classifier = nn.Sequential(
+            nn.Linear(classifier_input_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(classifier_dropout),
+            nn.Linear(hidden_dim // 2, num_classes)
+        )
         
         # Log model configuration
         logger.info(f"EEGCNNBiLSTMGCN initialized:")
