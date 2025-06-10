@@ -13,13 +13,14 @@ from tqdm import tqdm
 from torchmetrics.functional import accuracy, f1_score, auroc, precision, recall
 from torch_geometric.utils import to_dense_batch
 import numpy as np  # For median/IQR calculations
-from src.data.geodataloader import GeoDataLoader
 from src.data.dataset_graph import GraphEEGDataset 
+
+# import required dataloaders
+from torch_geometric.loader import DataLoader as GeoDataLoader
+from torch_geometric.data import DataLoader
 
 # k-fold
 from sklearn.model_selection import KFold, StratifiedKFold
-from torch_geometric.data import Dataset
-
 from src.utils.timeseries_eeg_dataset import TimeseriesEEGDataset
 
 # Import wandb with optional fallback
@@ -118,47 +119,6 @@ def _load(
     print("   - Model state successfully loaded.")
     return full_checkpoint_data # Return the loaded (or reconstructed) checkpoint data
 
-
-def _safe_model_call(model, x, edge_index=None, batch=None, graph_features=None):
-    """
-    Safely call a model with appropriate parameters based on its forward method signature.
-    
-    Args:
-        model: The PyTorch model to call
-        x: Node features
-        edge_index: Graph edge indices (for GNN models)
-        batch: Batch indices (for GNN models)
-        graph_features: Graph-level features (optional)
-    
-    Returns:
-        Model output
-    """
-    # Get the model's forward method signature
-    forward_signature = inspect.signature(model.forward)
-    params = forward_signature.parameters
-    
-    # Base call arguments for GNN models
-    if edge_index is not None and batch is not None:
-        call_args = [x, edge_index, batch]
-        call_kwargs = {}
-        
-        # Check if model accepts graph_features parameter
-        if 'graph_features' in params and graph_features is not None:
-            call_kwargs['graph_features'] = graph_features
-            
-        return model(*call_args, **call_kwargs)
-    else:
-        # Non-GNN models - just pass x
-        call_args = [x]
-        call_kwargs = {}
-        
-        # Some non-GNN models might still accept graph_features
-        if 'graph_features' in params and graph_features is not None:
-            call_kwargs['graph_features'] = graph_features
-            
-        return model(*call_args, **call_kwargs)
-
-
 # --- Training and Evaluation Loop ---
 def train_model(
     model: nn.Module,
@@ -230,110 +190,12 @@ def train_model(
                 config=config,
                 reinit=True
             )
-
-            logger.info(f"🔗 Wandb run initialized: {wandb_run.name}")
-
             # Watch the model for gradient and parameter tracking
             wandb.watch(model, log='all', log_freq=100) # type: ignore
             print(f"🔗 Wandb initialized: {wandb.run.name}") # type: ignore
-            
-            # Log dataset information to wandb if available
-            if original_dataset is not None:
-                logger.info("Logging dataset configuration to wandb...")
-                dataset_config = {}
-                
-                # Helper function to safely get attribute
-                def safe_get_attr(obj, attr_name, default=None):
-                    try:
-                        return getattr(obj, attr_name, default)
-                    except:
-                        return default
-                
-                # Signal processing settings
-                dataset_config['dataset/bandpass_frequencies'] = safe_get_attr(original_dataset, 'bandpass_frequencies', (0.5, 50))
-                dataset_config['dataset/segment_length'] = safe_get_attr(original_dataset, 'segment_length', 3000)
-                dataset_config['dataset/sampling_rate'] = safe_get_attr(original_dataset, 'sampling_rate', 250)
-                
-                # Calculate segment duration
-                segment_length = dataset_config['dataset/segment_length']
-                sampling_rate = dataset_config['dataset/sampling_rate']
-                if segment_length and sampling_rate:
-                    dataset_config['dataset/segment_duration_seconds'] = segment_length / sampling_rate
-                
-                # Preprocessing flags
-                dataset_config['dataset/apply_filtering'] = safe_get_attr(original_dataset, 'apply_filtering', False)
-                dataset_config['dataset/apply_rereferencing'] = safe_get_attr(original_dataset, 'apply_rereferencing', False)
-                dataset_config['dataset/apply_normalization'] = safe_get_attr(original_dataset, 'apply_normalization', False)
-                
-                # Graph construction settings
-                dataset_config['dataset/edge_strategy'] = safe_get_attr(original_dataset, 'edge_strategy', 'unknown')
-                dataset_config['dataset/top_k'] = safe_get_attr(original_dataset, 'top_k', None)
-                dataset_config['dataset/correlation_threshold'] = safe_get_attr(original_dataset, 'correlation_threshold', 0.7)
-                
-                # Feature settings
-                dataset_config['dataset/use_embeddings'] = safe_get_attr(original_dataset, 'embeddings_train', False)
-                dataset_config['dataset/use_selected_features'] = safe_get_attr(original_dataset, 'selected_features_train', False)
-                dataset_config['dataset/extract_graph_features'] = safe_get_attr(original_dataset, 'extract_graph_features', False)
-                
-                # Dataset metadata
-                dataset_config['dataset/n_channels'] = safe_get_attr(original_dataset, 'n_channels', 19)
-                dataset_config['dataset/is_test'] = safe_get_attr(original_dataset, 'is_test', False)
-                dataset_config['dataset/force_reprocess'] = safe_get_attr(original_dataset, 'force_reprocess', False)
-                
-                # Dataset size
-                try:
-                    dataset_config['dataset/total_samples'] = len(original_dataset)
-                except:
-                    dataset_config['dataset/total_samples'] = 'unknown'
-                
-                # Add graph feature types if available
-                graph_feature_types = safe_get_attr(original_dataset, 'graph_feature_types', None)
-                if graph_feature_types:
-                    dataset_config['dataset/graph_feature_types'] = graph_feature_types
-                
-                # Add graph feature extractor info if available
-                graph_feature_extractor = safe_get_attr(original_dataset, 'graph_feature_extractor', None)
-                if graph_feature_extractor and hasattr(graph_feature_extractor, 'feature_types'):
-                    dataset_config['dataset/graph_feature_extractor_types'] = graph_feature_extractor.feature_types
-                
-                # Add channel information
-                channels = safe_get_attr(original_dataset, 'channels', None)
-                if channels:
-                    dataset_config['dataset/channels'] = channels
-                    dataset_config['dataset/n_channels_actual'] = len(channels)
-                
-                # Add clips information if available
-                clips = safe_get_attr(original_dataset, 'clips', None)
-                if clips is not None:
-                    try:
-                        dataset_config['dataset/n_clips'] = len(clips)
-                        
-                        # Add label distribution for training data
-                        if not safe_get_attr(original_dataset, 'is_test', True) and hasattr(clips, 'columns') and 'label' in clips.columns:
-                            label_counts = clips['label'].value_counts().to_dict()
-                            dataset_config['dataset/label_distribution'] = label_counts
-                            dataset_config['dataset/n_positive'] = label_counts.get(1, 0)
-                            dataset_config['dataset/n_negative'] = label_counts.get(0, 0)
-                            if len(clips) > 0:
-                                dataset_config['dataset/positive_ratio'] = label_counts.get(1, 0) / len(clips)
-                        
-                        # Add patient/session information if available
-                        if hasattr(clips, 'columns'):
-                            if 'patient' in clips.columns:
-                                dataset_config['dataset/n_patients'] = clips['patient'].nunique()
-                            if 'session' in clips.columns:
-                                dataset_config['dataset/n_sessions'] = clips['session'].nunique()
-                    except Exception as e:
-                        logger.warning(f"Could not extract clips information: {e}")
-                
-                # Log the dataset configuration to wandb
-                wandb.config.update(dataset_config) # type: ignore
-                logger.info(f"Logged {len(dataset_config)} dataset parameters to wandb")
-                
         except Exception as e:
             print(f"⚠️ Warning: Could not initialize wandb: {e}")
             log_wandb = False
-
     elif log_wandb and not WANDB_AVAILABLE:
         print("⚠️ Warning: wandb logging requested but wandb not available")
         log_wandb = False
@@ -354,26 +216,26 @@ def train_model(
             # Restore histories
             loaded_train_hist = checkpoint.get('train_history', {})
             loaded_val_hist = checkpoint.get('val_history', {})
-            for key, val_list in loaded_train_hist.items(): train_history[key].extend(val_list)
-            for key, val_list in loaded_val_hist.items(): val_history[key].extend(val_list)
+            for key, val_list in loaded_train_hist.items():
+                train_history[key].extend(val_list)
+            for key, val_list in loaded_val_hist.items():
+                val_history[key].extend(val_list)
 
             start_epoch = checkpoint.get('epoch', 0)
             loaded_best_score = checkpoint.get('best_score')
-            if loaded_best_score is not None: best_score = loaded_best_score
+            if loaded_best_score is not None:
+                best_score = loaded_best_score
             
             if start_epoch >= num_epochs:
                  print(f" 🏁 Training already completed up to epoch {start_epoch}. Final best '{monitor}': {best_score:.4f}")
                  return dict(train_history), dict(val_history)
             print(f" ✅ Checkpoint loaded. Resuming from epoch {start_epoch + 1}. Best '{monitor}' score: {best_score:.4f}")
-
         except Exception as e:
             print(f" ⚠️ Could not load checkpoint: {e}. Starting training from scratch.")
             save_path.unlink(missing_ok=True)
             start_epoch = 0 # Ensure start_epoch is reset
             # Re-initialize best_score based on monitor
-            if monitor in ["val_loss", "loss"]: best_score = float("inf")
-            else: best_score = -float("inf")
-
+            best_score = float("inf") if monitor in ["val_loss", "loss"] else -float("inf")
     elif overwrite and save_path.exists():
         print(f" 🗑️ Overwrite enabled: Removed existing checkpoint at {save_path}")
         save_path.unlink()
@@ -418,18 +280,11 @@ def train_model(
                     raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
                 
                 try:
-                    # get graph features if available
                     if hasattr(curr_batch, 'graph_features'):
-                        graph_features = curr_batch.graph_features
+                        logits = model(curr_batch.x.float(), curr_batch.edge_index, curr_batch.batch, curr_batch.graph_features)
                     else:
-                        graph_features = None
+                        logits = model(curr_batch.x.float(), curr_batch.edge_index, curr_batch.batch)
 
-                    # Use safe model call that handles graph_features parameter automatically
-                    logits = _safe_model_call(model, 
-                                            curr_batch.x.float(),
-                                            curr_batch.edge_index,
-                                            curr_batch.batch,
-                                            graph_features)
                     # unsqueeze y_targets to match the shape of the logits. used later!
                 except Exception as e:
                     logger.error(f"Error in forward pass for batch {batch_idx}: {str(e)}")
@@ -437,44 +292,11 @@ def train_model(
                     logger.error(f"Edge index content: {curr_batch.edge_index}")
                     raise
             else:
-                if isinstance(data_batch_item, (tuple, list)) and len(data_batch_item) == 2:
-                    x_batch, y_batch = data_batch_item
-                    x_batch = x_batch.to(device)
-                    y_targets = y_batch.to(device) if isinstance(y_batch, torch.Tensor) else torch.tensor(y_batch, device=device)
-                    y_targets = y_targets.reshape(-1, 1)
-                    # Use safe model call for non-GNN models
-                    logits = _safe_model_call(model, x_batch.float())
-                elif hasattr(data_batch_item, 'x') and hasattr(data_batch_item, 'y'):
-                    if not to_dense_batch: # Should be caught earlier if PyG not installed but good check
-                         raise ImportError("PyTorch Geometric 'to_dense_batch' is required for this non-GNN path if data is PyG Batch.")
-                    curr_batch = data_batch_item.to(device) # type: ignore
-                    y_targets = curr_batch.y.reshape(-1, 1)
-                    if y_targets is None: continue
-                    
-                    # Extract graph features if available
-                    if hasattr(curr_batch, 'graph_features'):
-                        graph_features = curr_batch.graph_features
-                    else:
-                        graph_features = None
-                    
-                    n_channels = 19 # This was hardcoded, consider making it a parameter or inferring
-                    assert n_channels > 0, "n_channels must be a positive integer."
-                    if curr_batch.num_graphs > 0:
-                        node_features_tensor = curr_batch.x
-                        if node_features_tensor.ndim == 1: node_features_tensor = node_features_tensor.unsqueeze(-1)
-                        num_features_per_channel = node_features_tensor.size(1)
-                        expected_total_nodes = curr_batch.num_graphs * n_channels
-                        if node_features_tensor.size(0) == expected_total_nodes:
-                            input_features = node_features_tensor.view(curr_batch.num_graphs, n_channels, num_features_per_channel)
-                        else:
-                            batch_attr = getattr(curr_batch, 'batch', None)
-                            input_features, _ = to_dense_batch(node_features_tensor, batch_attr, max_num_nodes=n_channels)
-                    elif curr_batch.num_graphs == 0: raise ValueError("Empty batch encountered.")
-                    else: raise ValueError(f"Unexpected num_graphs: {curr_batch.num_graphs}.")
-                    # Use safe model call that can handle graph_features if the model supports it
-                    logits = _safe_model_call(model, input_features.float(), graph_features=graph_features)
-                else:
-                    raise ValueError("Batch data must be a tuple (x, y) or have 'x' and 'y' attributes for non-GNN mode.")
+                curr_batch = data_batch_item.to(device)
+                y_targets = curr_batch.y.reshape(-1, 1)
+                if y_targets is None:
+                    continue
+                logits = model(curr_batch.x.float())
 
             # Compute loss on raw logits
             loss = criterion(logits, y_targets)
@@ -484,9 +306,7 @@ def train_model(
             optimizer.step()
 
             # convert logits to binary predictions
-            probs = logits.sigmoid().squeeze()  # [batch_size, 1] -> [batch_size]
-            probs_cpu = probs.cpu()  # Move to CPU for logging and metrics
-            targets_cpu = y_targets.squeeze(1).int().cpu()
+            probs = logits.sigmoid().squeeze() # [batch_size, 1] -> [batch_size]
             
             # Validate probability ranges
             if torch.any(probs < 0) or torch.any(probs > 1):
@@ -495,8 +315,9 @@ def train_model(
 
             # store round results
             epoch_train_loss += loss.item()
-            all_train_preds.append(probs_cpu) # Store probabilities instead of binary predictions
-            all_train_targets.append(targets_cpu) # shape: (batch_size)
+            # Store probabilities instead of binary predictions
+            all_train_preds.append(probs.cpu())
+            all_train_targets.append(y_targets.squeeze(1).int().cpu())  # shape: (batch_size)
 
             # assert that all_train_preds and all_train_targets have the same shape
             assert all_train_preds[0].shape == all_train_targets[0].shape, f"all_train_preds and all_train_targets have different shapes: {all_train_preds[0].shape} != {all_train_targets[0].shape}"
@@ -546,9 +367,11 @@ def train_model(
                 train_history['macro_f1'].append(train_macro_f1)
                 
                 # Log metric values for debugging
-                logger.debug(f"Epoch {epoch} training metrics - Acc: {train_acc:.4f}, F1: {train_f1:.4f}, "
-                           f"Precision: {train_precision:.4f}, Recall: {train_recall:.4f}, "
-                           f"AUROC: {train_auroc:.4f}, Macro F1: {train_macro_f1:.4f}")
+                print(
+                    f"Epoch {epoch} training metrics - Acc: {train_acc:.4f}, F1: {train_f1:.4f}, "
+                    f"Precision: {train_precision:.4f}, Recall: {train_recall:.4f}, "
+                    f"AUROC: {train_auroc:.4f}, Macro F1: {train_macro_f1:.4f}"
+                )
             except ValueError as e:
                 logger.error(f"Error computing metrics (Epoch {epoch}): {str(e)}")
                 logger.error(f"Preds shape: {preds_cat_train.shape}, Targets shape: {targets_cat_train.shape}")
@@ -569,7 +392,6 @@ def train_model(
              train_history['auroc'].append(0.0)
              train_history['macro_f1'].append(0.0)
 
-
         # Validation
         model.eval()
         epoch_val_loss = 0.0
@@ -587,67 +409,29 @@ def train_model(
                     if not (hasattr(curr_batch, 'x') and hasattr(curr_batch, 'edge_index')):
                          raise ValueError("For GNN mode, batch_data must have 'x' and 'edge_index'.")
                     
-                    # Extract graph features if available (same as training)
-                    if hasattr(curr_batch, 'graph_features'):
-                        graph_features = curr_batch.graph_features
-                    else:
-                        graph_features = None
-                    
-                    # Extract patient information
+                    # Extract patient information for metrics calculation
                     patient_ids = None
                     if hasattr(curr_batch, 'patient'):
                         patient_ids = curr_batch.patient.cpu().tolist() if isinstance(curr_batch.patient, torch.Tensor) else curr_batch.patient
+
+                    # Extract graph features if available (same as training)
+                    if hasattr(curr_batch, 'graph_features'):
+                        logits = model(curr_batch.x.float(), curr_batch.edge_index, curr_batch.batch, curr_batch.graph_features)
+                    else:
+                        logits = model(curr_batch.x.float(), curr_batch.edge_index, curr_batch.batch)
                     
-                    # Use safe model call that handles graph_features parameter automatically
-                    logits = _safe_model_call(model,
-                                            curr_batch.x.float(),
-                                            curr_batch.edge_index,
-                                            curr_batch.batch,
-                                            graph_features)
                 else: # Non-GNN
                     # Extract patient information (if available)
                     patient_ids = None
                     if hasattr(data_batch_item_val, 'patient'):
                         patient_ids = data_batch_item_val.patient.cpu().tolist() if isinstance(data_batch_item_val.patient, torch.Tensor) else data_batch_item_val.patient
                     
-                    if isinstance(data_batch_item_val, (tuple, list)) and len(data_batch_item_val) == 2:
-                        x_batch_val, y_batch_val = data_batch_item_val
-                        x_batch_val = x_batch_val.to(device)
-                        if y_batch_val is not None:
-                            y_targets = y_batch_val.to(device) if isinstance(y_batch_val, torch.Tensor) else torch.tensor(y_batch_val, device=device)
-                            y_targets = y_targets.reshape(-1, 1)
-                        else: continue # Skip if no labels in validation
-                        # Use safe model call for non-GNN models too
-                        logits = _safe_model_call(model, x_batch_val.float())
-                    elif hasattr(data_batch_item_val, 'x') and hasattr(data_batch_item_val, 'y'):
-                        curr_batch = data_batch_item_val.to(device) # type: ignore
-                        y_targets = curr_batch.y.reshape(-1, 1)
-                        if y_targets is None: continue
-                        
-                        # Extract graph features if available
-                        if hasattr(curr_batch, 'graph_features'):
-                            graph_features = curr_batch.graph_features
-                        else:
-                            graph_features = None
-                        
-                        n_channels = 19 # This was hardcoded
-                        assert n_channels > 0
-                        if curr_batch.num_graphs > 0:
-                            node_features_tensor = curr_batch.x
-                            if node_features_tensor.ndim == 1: node_features_tensor = node_features_tensor.unsqueeze(-1)
-                            num_features_per_channel = node_features_tensor.size(1)
-                            expected_total_nodes = curr_batch.num_graphs * n_channels
-                            if node_features_tensor.size(0) == expected_total_nodes:
-                                input_features_val = node_features_tensor.view(curr_batch.num_graphs, n_channels, num_features_per_channel)
-                            else:
-                                batch_attr = getattr(curr_batch, 'batch', None)
-                                input_features_val, _ = to_dense_batch(node_features_tensor, batch_attr, max_num_nodes=n_channels)
-                        elif curr_batch.num_graphs == 0: continue # Skip empty val batch
-                        else: raise ValueError(f"Unexpected num_graphs in val: {curr_batch.num_graphs}.")
-                        # Use safe model call that can handle graph_features if the model supports it
-                        logits = _safe_model_call(model, input_features_val.float(), graph_features=graph_features)
-                    else:
-                        raise ValueError("Val batch data must be a tuple (x, y) or have 'x' and 'y' attributes for non-GNN mode.")
+                    # get current batch and targets
+                    curr_batch = data_batch_item_val.to(device) # type: ignore
+                    y_targets = curr_batch.y.reshape(-1, 1)
+
+                    # inference with model
+                    logits = model(curr_batch.x.float())
 
                 # compute loss on validation set using raw logits
                 epoch_val_loss += criterion(logits, y_targets).item()
@@ -663,11 +447,10 @@ def train_model(
                 # store round results
                 probs_cpu = probs.cpu()
                 targets_cpu = y_targets.squeeze(1).int().cpu()
+                assert probs_cpu.shape == targets_cpu.shape, f"Probs and targets have different shapes: {probs_cpu.shape} != {targets_cpu.shape}"
 
-                all_val_preds.append(probs_cpu) # Store probabilities instead of binary predictions
+                all_val_preds.append(probs_cpu)
                 all_val_targets.append(targets_cpu)
-                # assert that all_val_preds and all_val_targets have the same shape
-                assert all_val_preds[0].shape == all_val_targets[0].shape, f"all_val_preds and all_val_targets have different shapes: {all_val_preds[0].shape} != {all_val_targets[0].shape}"
 
                 # Store predictions and targets by patient ID
                 if patient_ids is not None:
@@ -884,10 +667,9 @@ def train_model(
     logger.info("Training completed successfully!")
     
     # Log final results
-    final_epoch = epoch if 'epoch' in locals() else num_epochs
     final_metrics = {
         "final_best_score": best_score,
-        "final_epoch": final_epoch,
+        "final_epoch": epoch,
         "total_bad_epochs": bad_epochs
     }
     logger.info(f"Final results: {final_metrics}")
@@ -963,16 +745,9 @@ def evaluate_model(
                 
                 # Extract graph features if available
                 if hasattr(batch_data, 'graph_features'):
-                    graph_features = batch_data.graph_features
+                    logits = model(batch_data.x.float(), batch_data.edge_index, batch_data.batch, batch_data.graph_features)
                 else:
-                    graph_features = None
-                
-                # Use safe model call for evaluation too
-                logits = _safe_model_call(model,
-                                        batch_data.x.float(), 
-                                        batch_data.edge_index, 
-                                        batch_data.batch,
-                                        graph_features)
+                    logits = model(batch_data.x.float(), batch_data.edge_index, batch_data.batch)
             else:
                 # Handle non-GNN models based on input_type
                 if input_type == 'feature':
@@ -1178,23 +953,33 @@ def train_k_fold(
             train_loader = GeoDataLoader(
                 train_subset, 
                 batch_size=batch_size, 
+                follow_batch=['x'],
                 shuffle=True,
+                pin_memory=True,
+                num_workers=4
             )
             val_loader = GeoDataLoader(
                 val_subset, 
                 batch_size=batch_size, 
+                follow_batch=['x'],
                 shuffle=False,
+                pin_memory=True,
+                num_workers=4
             )
         else:
             train_loader = torch.utils.data.DataLoader(
                 train_subset, 
                 batch_size=batch_size, 
-                shuffle=True
+                shuffle=True,
+                pin_memory=True,
+                num_workers=4
             )
             val_loader = torch.utils.data.DataLoader(
                 val_subset, 
                 batch_size=batch_size, 
-                shuffle=False
+                shuffle=False,
+                pin_memory=True,
+                num_workers=4
             )
         
         # Initialize model for this fold
