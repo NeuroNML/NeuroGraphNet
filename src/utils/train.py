@@ -485,6 +485,8 @@ def train_model(
 
             # convert logits to binary predictions
             probs = logits.sigmoid().squeeze()  # [batch_size, 1] -> [batch_size]
+            probs_cpu = probs.cpu()  # Move to CPU for logging and metrics
+            targets_cpu = y_targets.squeeze(1).int().cpu()
             
             # Validate probability ranges
             if torch.any(probs < 0) or torch.any(probs > 1):
@@ -493,8 +495,8 @@ def train_model(
 
             # store round results
             epoch_train_loss += loss.item()
-            all_train_preds.append(probs.cpu()) # Store probabilities instead of binary predictions
-            all_train_targets.append(y_targets.squeeze(1).int().cpu()) # shape: (batch_size)
+            all_train_preds.append(probs_cpu) # Store probabilities instead of binary predictions
+            all_train_targets.append(targets_cpu) # shape: (batch_size)
 
             # assert that all_train_preds and all_train_targets have the same shape
             assert all_train_preds[0].shape == all_train_targets[0].shape, f"all_train_preds and all_train_targets have different shapes: {all_train_preds[0].shape} != {all_train_targets[0].shape}"
@@ -659,14 +661,16 @@ def train_model(
                     probs = torch.clamp(probs, 0, 1)
 
                 # store round results
-                all_val_preds.append(probs.cpu()) # Store probabilities instead of binary predictions
-                all_val_targets.append(y_targets.squeeze(1).int().cpu())
-                
+                probs_cpu = probs.cpu()
+                targets_cpu = y_targets.squeeze(1).int().cpu()
+
+                all_val_preds.append(probs_cpu) # Store probabilities instead of binary predictions
+                all_val_targets.append(targets_cpu)
+                # assert that all_val_preds and all_val_targets have the same shape
+                assert all_val_preds[0].shape == all_val_targets[0].shape, f"all_val_preds and all_val_targets have different shapes: {all_val_preds[0].shape} != {all_val_targets[0].shape}"
+
                 # Store predictions and targets by patient ID
                 if patient_ids is not None:
-                    probs_cpu = probs.cpu()
-                    targets_cpu = y_targets.squeeze(1).int().cpu()
-                    
                     # Ensure we have the same number of patient IDs as predictions
                     if len(patient_ids) != len(probs_cpu):
                         logger.warning(f"Mismatch between patient IDs ({len(patient_ids)}) and predictions ({len(probs_cpu)})")
@@ -914,13 +918,15 @@ def evaluate_model(
     print(f"⚙️ Evaluating model. Loading model from: {checkpoint_path}")
     if not checkpoint_path.exists():
         print(f"❌ Error: Checkpoint file not found at {checkpoint_path}. Cannot evaluate.")
-        return pd.DataFrame()
+        print(f"   Please check the path and ensure the model was saved correctly.")
+        return pd.DataFrame({"id": [], "label": []})  # Return empty DataFrame with correct columns
 
     try:
         _ = _load(model, checkpoint_path, device)
     except Exception as e:
         print(f"❌ Error loading model checkpoint for evaluation: {e}")
-        return pd.DataFrame()
+        print(f"   The checkpoint file might be corrupted or incompatible with the model.")
+        return pd.DataFrame({"id": [], "label": []})  # Return empty DataFrame with correct columns
         
     model.to(device).eval()
 
@@ -1035,14 +1041,26 @@ def evaluate_model(
     # Ensure all_ids and all_binary_preds have the same length
     min_len = min(len(all_ids), len(all_binary_preds))
     if len(all_ids) != len(all_binary_preds):
-        print(f"Warning: Mismatch in length of IDs ({len(all_ids)}) and predictions ({len(all_binary_preds)}). Truncating to {min_len}.")
+        print(f"⚠️ Warning: Mismatch in total length of IDs ({len(all_ids)}) and predictions ({len(all_binary_preds)})")
+        print(f"   Truncating both to {min_len} entries to ensure consistency")
+        # This shouldn't happen if we handled batch-level mismatches correctly, but just in case
+        all_ids = all_ids[:min_len]
+        all_binary_preds = all_binary_preds[:min_len]
     
     # create submission dataframe + sort by id to maintain the same order as the test set
-    sub_df = pd.DataFrame({"id": all_ids[:min_len], "label": all_binary_preds[:min_len]})
+    sub_df = pd.DataFrame({"id": all_ids, "label": all_binary_preds})
+    
+    # Sort by ID to maintain the same order as the test set
     sub_df = sub_df.sort_values(by="id", key=lambda col: col.astype(str)) # Robust string sort
 
     # save submission file
     submission_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if len(sub_df) == 0:
+        print(f"⚠️ Warning: No predictions were generated. Creating an empty submission file.")
+        # Still save an empty file with the correct columns
+        sub_df = pd.DataFrame({"id": [], "label": []})
+    
     sub_df.to_csv(submission_path, index=False)
     print(f"📄 Saved submission ({len(sub_df)} rows) → {submission_path}")
 
