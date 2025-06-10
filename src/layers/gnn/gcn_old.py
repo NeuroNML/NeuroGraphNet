@@ -1,143 +1,76 @@
-# General imports
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import Dropout, BatchNorm1d
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GCNConv, global_mean_pool
+from torch.nn import Linear, BatchNorm1d
 
-from src.utils.model import pooling
 
 class EEGGCN(torch.nn.Module):
-    """
-    Graph Convolutional Network for EEG signal processing.
-    Features:
-    - Optional CNN preprocessing for time series reduction
-    - Multiple GCN layers with configurable dimensions
-    - Batch normalization
-    - Dropout for regularization
-    - Configurable pooling strategy
-    - Optional MLP head for classification
-    """
-    def __init__(
-        self,
-        in_channels=3000,
-        hidden_channels=640,
-        out_channels=64,
-        num_conv_layers=3,
-        pooling_type="max",
-        dropout_prob=0.5,
-        use_cnn_preprocessing=False,
-        use_batch_norm=True,
-        mlp_dims=None,
-    ):
-        """
-        Args:
-            in_channels: Input feature dimension (default: 3000 for EEG)
-            hidden_channels: Number of hidden units in intermediate layers
-            out_channels: Feature dimension before final classifier
-            num_conv_layers: Number of GCN layers
-            pooling_type: Type of graph pooling ("mean" or "sum")
-            dropout_prob: Dropout probability
-            use_cnn_preprocessing: Whether to use CNN for time series reduction
-            use_batch_norm: Whether to use batch normalization
-            mlp_dims: List of dimensions for MLP head (if None, uses single linear layer)
-        """
+    def __init__(self, in_channels, hidden_channels, out_channels, num_classes, num_conv_layers=3, dropout=0.5):
         super(EEGGCN, self).__init__()
+        
+        # Ensure num_conv_layers is not negative, handle 0 if it means direct to linear
+        if num_conv_layers < 0:
+            raise ValueError("num_conv_layers cannot be negative.")
 
-        # CNN preprocessing for time series reduction
-        if use_cnn_preprocessing:
-            self.cnn = nn.Sequential(
-                nn.Conv1d(1, 8, kernel_size=15, stride=2, padding=7),
-                nn.LeakyReLU(),
-                nn.Conv1d(8, 16, kernel_size=15, stride=2, padding=7),
-                nn.LeakyReLU(),
-                nn.Conv1d(16, 1, kernel_size=3, stride=1, padding=1),
-            )
-            self.project_to = nn.Linear(750, in_channels)
-        else:
-            self.cnn = None
-            self.project_to = None
-
-        # GCN layers
         self.num_conv_layers = num_conv_layers
-        self.conv_layers = nn.ModuleList()
-        self.batch_norms = nn.ModuleList() if use_batch_norm else None
+        self.dropout = torch.nn.Dropout(dropout)
+        
+        self.conv_layers = torch.nn.ModuleList()
+        self.bn_layers = torch.nn.ModuleList()
+        
+        current_dim = in_channels
 
-        # First layer
-        if num_conv_layers == 1:
-            self.conv_layers.append(GCNConv(in_channels, out_channels))
-            if use_batch_norm and self.batch_norms is not None:
-                self.batch_norms.append(BatchNorm1d(out_channels))
-        else:
-            self.conv_layers.append(GCNConv(in_channels, hidden_channels))
-            if use_batch_norm and self.batch_norms is not None:
-                self.batch_norms.append(BatchNorm1d(hidden_channels))
+        if num_conv_layers > 0:
+            # First layer
+            self.conv_layers.append(GCNConv(current_dim, hidden_channels if num_conv_layers > 1 else out_channels))
+            self.bn_layers.append(BatchNorm1d(hidden_channels if num_conv_layers > 1 else out_channels))
+            current_dim = hidden_channels if num_conv_layers > 1 else out_channels
             
-            # Intermediate layers
-            for _ in range(num_conv_layers - 2):
-                self.conv_layers.append(GCNConv(hidden_channels, hidden_channels))
-                if use_batch_norm and self.batch_norms is not None:
-                    self.batch_norms.append(BatchNorm1d(hidden_channels))
+            # Middle layers
+            for _ in range(1, num_conv_layers - 1):
+                self.conv_layers.append(GCNConv(current_dim, hidden_channels))
+                self.bn_layers.append(BatchNorm1d(hidden_channels))
+                # current_dim remains hidden_channels
             
-            # Final layer
-            self.conv_layers.append(GCNConv(hidden_channels, out_channels))
-            if use_batch_norm and self.batch_norms is not None:
-                self.batch_norms.append(BatchNorm1d(out_channels))
-
-        # Pooling and dropout
-        self.pooling_type = pooling_type
-        self.dropout = Dropout(p=dropout_prob)
-
-        # MLP head
-        if mlp_dims is not None:
-            mlp_layers = []
-            prev_dim = out_channels
-            for dim in mlp_dims:
-                mlp_layers.extend([
-                    nn.Linear(prev_dim, dim),
-                    nn.LeakyReLU(),
-                    nn.Dropout(dropout_prob)
-                ])
-                prev_dim = dim
-            mlp_layers.append(nn.Linear(prev_dim, 1))
-            self.mlp = nn.Sequential(*mlp_layers)
+            # Last layer (if num_conv_layers > 1 and it's different from the first)
+            if num_conv_layers > 1:
+                self.conv_layers.append(GCNConv(current_dim, out_channels))
+                self.bn_layers.append(BatchNorm1d(out_channels))
+            
+            # The input to the linear layer will be out_channels if GCN layers are used
+            linear_in_features = out_channels
         else:
-            self.mlp = nn.Linear(out_channels, 1)
+            # If no GCN layers, the input to linear is the original in_channels
+            # (or you might want a projection if in_channels is too large)
+            # This example assumes direct pass-through of initial features after pooling.
+            linear_in_features = in_channels 
+            # Or: self.projection = Linear(in_channels, out_channels)
+            # linear_in_features = out_channels
+
+        # Output layer
+        self.linear = Linear(linear_in_features, num_classes)
 
     def forward(self, x, edge_index, batch):
-        """
-        Forward pass.
-
-        Args:
-            x: Node features [num_nodes_batch, in_channels]
-            edge_index: Edge list [2, num_edges]
-            batch: Graph batch vector [num_nodes_batch]
-
-        Returns:
-            Class logits [num_graphs, 1]
-        """
-        # CNN preprocessing
-        if self.cnn is not None:
-            x = x.unsqueeze(1)  # [N, 1, T]
-            x = self.cnn(x).squeeze(1)  # [N, T/4]
-            # x = self.project_to(x)  # [N, in_channels]
-
-        # GCN layers
-        for i in range(self.num_conv_layers - 1):
-            x = self.conv_layers[i](x, edge_index)
-            if self.batch_norms is not None:
-                x = self.batch_norms[i](x)
-            x = F.leaky_relu(x)
-            x = self.dropout(x)
-
-        # Final layer
-        x = self.conv_layers[-1](x, edge_index)
-        if self.batch_norms is not None:
-            x = self.batch_norms[-1](x)
-        x = F.leaky_relu(x)
-
-        # Perform pooling
-        x = pooling(x, batch, self.pooling_type)
-
-        # MLP head
-        return self.mlp(x)
+        if self.num_conv_layers > 0:
+            for i in range(self.num_conv_layers): # Iterate through all GCN layers
+                x = self.conv_layers[i](x, edge_index)
+                x = self.bn_layers[i](x)
+                x = F.relu(x)
+                # Apply dropout to all GCN layers except the very last one before pooling,
+                # or apply to all based on preference.
+                # Your original code applied it to all but the last activation.
+                if i < self.num_conv_layers - 1: # Common to apply dropout to hidden layers
+                    x = self.dropout(x)
+        
+        # Global pooling
+        x = global_mean_pool(x, batch)
+        
+        # If num_conv_layers == 0 and you added a projection:
+        # if self.num_conv_layers == 0 and hasattr(self, 'projection'):
+        #     x = self.projection(x)
+        #     x = F.relu(x) # Optional activation
+            
+        # Final classification
+        x = self.linear(x)
+        
+        return x
