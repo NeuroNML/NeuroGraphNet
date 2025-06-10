@@ -1,5 +1,5 @@
 import logging
-from torch_geometric.data import DataLoader
+from torch_geometric.loader import DataLoader
 from src.utils.graph_features import batch_graph_features
 
 logging.basicConfig(level=logging.INFO)
@@ -23,7 +23,6 @@ class GeoDataLoader:
             follow_batch=['x'],  # This helps with batching
             shuffle=shuffle,
             sampler=sampler,
-            drop_last=drop_last,
             num_workers=num_workers,
             pin_memory=True,
         )
