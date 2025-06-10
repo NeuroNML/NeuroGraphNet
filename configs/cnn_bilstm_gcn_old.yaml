@@ -1,0 +1,31 @@
+model:
+  type: gcn_bilstm_gcn_old
+  name: LSTM_GCN_Model
+  params:
+    cnn_dropout: float = 0.25,
+    lstm_hidden_dim: int = 128,
+    lstm_out_dim: int = 128,
+    lstm_dropout: float = 0.2,
+    gcn_hidden_channels: int = 128,
+    gcn_out_channels: int = 64,
+    num_gcn_layers: int = 3,
+    gcn_dropout: float = 0.5,
+    num_classes: int = 1,
+    num_channels: int = 19,
+   
+
+
+batch_size: 64
+learning_rate: 0.0005
+weight_decay: 0.0001
+epochs: 200
+seed: 42
+oversampling_power: 0.6
+
+embeddings: False
+selected_features:  False
+edge_strategy: correlation
+top_k :  3
+correlation_threshold: False
+low_bandpass_frequency: 0.5
+high_bandpass_frequency: 50
